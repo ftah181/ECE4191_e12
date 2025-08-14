@@ -1,0 +1,32 @@
+# --- Python bytecode ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtual environment ---
+venv/
+roboflow_env/
+
+# --- Output folders ---
+output/
+results/
+logs/
+
+# --- Jupyter Notebook checkpoints ---
+.ipynb_checkpoints/
+
+# --- OS generated files ---
+.DS_Store
+Thumbs.db
+
+# --- Python packaging ---
+*.egg-info/
+dist/
+build/
+
+# --- IDE settings (optional) ---
+.vscode/
+.idea/
+
+# --- Ignore secrets ---
+*.env
