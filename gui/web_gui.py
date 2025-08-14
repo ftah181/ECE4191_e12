@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Web-based Raspberry Pi Camera and Sensor Monitor
-Access via web browser - no X11 display required
+Web-based GUI
 """
 
 from flask import Flask, render_template, Response, jsonify
@@ -14,7 +13,7 @@ import numpy as np
 import random
 from datetime import datetime
 
-# Try to import hardware libraries
+# Try to import hardware libraries. For testing when no hardware
 try:
     import RPi.GPIO as GPIO
     import spidev
@@ -24,6 +23,7 @@ except ImportError:
 
 app = Flask(__name__)
 
+# Define web app class
 class CameraSensorWebApp:
     def __init__(self):
         self.camera = None
@@ -42,7 +42,7 @@ class CameraSensorWebApp:
         self.start_data_collection()
     
     def setup_hardware(self):
-        """Initialize SPI for ADC"""
+        # Initialize SPI for ADC
         self.spi = None
         if REAL_HARDWARE:
             try:
@@ -54,7 +54,7 @@ class CameraSensorWebApp:
                 print(f"SPI init failed: {e}")
     
     def read_adc_channel(self, channel):
-        """Read ADC channel"""
+        # Read ADC channel
         if self.spi and channel < 8:
             try:
                 adc_command = [1, (8 + channel) << 4, 0]
@@ -70,7 +70,7 @@ class CameraSensorWebApp:
             return max(0, min(3.3, base_values[channel] + noise + 0.5 * np.sin(time.time() + channel)))
     
     def start_data_collection(self):
-        """Start sensor data collection"""
+        # Start sensor data collection
         def collect_data():
             start_time = time.time()
             while True:
@@ -93,7 +93,7 @@ class CameraSensorWebApp:
         thread.start()
     
     def start_camera(self):
-        """Start camera capture"""
+        # Start camera capture
         try:
             self.camera = cv2.VideoCapture(0)
             if self.camera.isOpened():
@@ -106,13 +106,13 @@ class CameraSensorWebApp:
         return False
     
     def stop_camera(self):
-        """Stop camera"""
+        # Stop camera
         self.camera_running = False
         if self.camera:
             self.camera.release()
     
     def generate_frames(self):
-        """Generate camera frames"""
+        # Generate camera frames
         while self.camera_running and self.camera:
             try:
                 ret, frame = self.camera.read()
@@ -130,7 +130,7 @@ class CameraSensorWebApp:
                 break
     
     def get_sensor_data(self):
-        """Get current sensor data"""
+        # Get current sensor data
         return {
             'timestamps': list(self.sensor_data['timestamps'])[-50:],  # Last 50 points
             'channel_0': list(self.sensor_data['channel_0'])[-50:],
@@ -214,11 +214,11 @@ html_template = '''
 </head>
 <body>
     <div class="container">
-        <h1>🔴 Pi Camera & Sensor Monitor</h1>
+        <h1>Pi Camera & Sensor Monitor</h1>
         
         <!-- Camera Panel -->
         <div class="panel">
-            <h2>📹 Camera Feed</h2>
+            <h2>Camera Feed</h2>
             <div class="controls">
                 <button id="start-camera" class="button" onclick="startCamera()">Start Camera</button>
                 <button id="stop-camera" class="button stop" onclick="stopCamera()">Stop Camera</button>
@@ -228,7 +228,7 @@ html_template = '''
         
         <!-- Sensor Panel -->
         <div class="panel">
-            <h2>📊 Sensor Data</h2>
+            <h2>Sensor Data</h2>
             <div class="values">
                 <div class="value-box">
                     <div>Channel 0</div>
@@ -244,8 +244,8 @@ html_template = '''
                 </div>
             </div>
             <div class="controls">
-                <button class="button" onclick="saveData()">💾 Save Data</button>
-                <button class="button" onclick="clearPlot()">🗑️ Clear Plot</button>
+                <button class="button" onclick="saveData()">Save Data</button>
+                <button class="button" onclick="clearPlot()">Clear Plot</button>
             </div>
             <div id="sensor-plot"></div>
         </div>
