@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Web-based GUI
+Web-based GUI - Single Channel
 """
 
 from flask import Flask, render_template, Response, jsonify
@@ -29,13 +29,11 @@ class CameraSensorWebApp:
         self.camera = None
         self.camera_running = False
         
-        # Data storage
+        # Data storage - single channel only
         self.max_data_points = 100
         self.sensor_data = {
             'timestamps': deque(maxlen=self.max_data_points),
-            'channel_0': deque(maxlen=self.max_data_points),
-            'channel_1': deque(maxlen=self.max_data_points),
-            'channel_2': deque(maxlen=self.max_data_points)
+            'channel_0': deque(maxlen=self.max_data_points)
         }
         
         self.setup_hardware()
@@ -65,9 +63,9 @@ class CameraSensorWebApp:
                 return 0.0
         else:
             # Simulated data
-            base_values = [1.2, 2.1, 0.8]
+            base_value = 1.5
             noise = random.uniform(-0.1, 0.1)
-            return max(0, min(3.3, base_values[channel] + noise + 0.5 * np.sin(time.time() + channel)))
+            return max(0, min(3.3, base_value + noise + 0.5 * np.sin(time.time())))
     
     def start_data_collection(self):
         # Start sensor data collection
@@ -78,10 +76,9 @@ class CameraSensorWebApp:
                     current_time = time.time() - start_time
                     self.sensor_data['timestamps'].append(current_time)
                     
-                    for i in range(3):
-                        channel_key = f'channel_{i}'
-                        value = self.read_adc_channel(i)
-                        self.sensor_data[channel_key].append(value)
+                    # Read channel 0
+                    value = self.read_adc_channel(0)
+                    self.sensor_data['channel_0'].append(value)
                     
                     time.sleep(0.1)  # 10Hz sampling
                 except Exception as e:
@@ -134,12 +131,8 @@ class CameraSensorWebApp:
         return {
             'timestamps': list(self.sensor_data['timestamps'])[-50:],  # Last 50 points
             'channel_0': list(self.sensor_data['channel_0'])[-50:],
-            'channel_1': list(self.sensor_data['channel_1'])[-50:],
-            'channel_2': list(self.sensor_data['channel_2'])[-50:],
             'current_values': {
                 'channel_0': list(self.sensor_data['channel_0'])[-1] if self.sensor_data['channel_0'] else 0,
-                'channel_1': list(self.sensor_data['channel_1'])[-1] if self.sensor_data['channel_1'] else 0,
-                'channel_2': list(self.sensor_data['channel_2'])[-1] if self.sensor_data['channel_2'] else 0,
             }
         }
 
@@ -194,7 +187,7 @@ html_template = '''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Pi Camera & Sensor Monitor</title>
+    <title>Pi Camera & Single Sensor Monitor</title>
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
@@ -205,16 +198,16 @@ html_template = '''
         .button:hover { background: #0056b3; }
         .button.stop { background: #dc3545; }
         .button.stop:hover { background: #c82333; }
-        .values { display: flex; gap: 20px; margin: 20px 0; }
-        .value-box { background: #e9ecef; padding: 15px; border-radius: 4px; text-align: center; }
-        .value-number { font-size: 24px; font-weight: bold; color: #007bff; }
+        .values { display: flex; gap: 20px; margin: 20px 0; justify-content: center; }
+        .value-box { background: #e9ecef; padding: 25px; border-radius: 8px; text-align: center; min-width: 150px; }
+        .value-number { font-size: 32px; font-weight: bold; color: #007bff; margin-top: 10px; }
         #camera-feed { max-width: 100%; height: 400px; background: #000; border-radius: 4px; }
         #sensor-plot { height: 400px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Pi Camera & Sensor Monitor</h1>
+        <h1>Pi Camera & Single Sensor Monitor</h1>
         
         <!-- Camera Panel -->
         <div class="panel">
@@ -228,19 +221,11 @@ html_template = '''
         
         <!-- Sensor Panel -->
         <div class="panel">
-            <h2>Sensor Data</h2>
+            <h2>Sensor Data (Channel 0)</h2>
             <div class="values">
                 <div class="value-box">
-                    <div>Channel 0</div>
+                    <div style="font-size: 18px; color: #666;">Current Reading</div>
                     <div id="ch0-value" class="value-number">0.00 V</div>
-                </div>
-                <div class="value-box">
-                    <div>Channel 1</div>
-                    <div id="ch1-value" class="value-number">0.00 V</div>
-                </div>
-                <div class="value-box">
-                    <div>Channel 2</div>
-                    <div id="ch2-value" class="value-number">0.00 V</div>
                 </div>
             </div>
             <div class="controls">
@@ -252,24 +237,17 @@ html_template = '''
     </div>
 
     <script>
-        let plotData = {
-            x: [],
-            y0: [], y1: [], y2: []
-        };
-
         // Initialize plot
         function initPlot() {
-            const trace0 = { x: [], y: [], name: 'Channel 0', line: {color: 'red'} };
-            const trace1 = { x: [], y: [], name: 'Channel 1', line: {color: 'blue'} };
-            const trace2 = { x: [], y: [], name: 'Channel 2', line: {color: 'green'} };
+            const trace0 = { x: [], y: [], name: 'Channel 0', line: {color: 'red', width: 3} };
             
             const layout = {
-                title: 'Real-time Sensor Data',
+                title: 'Real-time Sensor Data (Channel 0)',
                 xaxis: { title: 'Time (s)' },
                 yaxis: { title: 'Voltage (V)', range: [0, 3.3] }
             };
             
-            Plotly.newPlot('sensor-plot', [trace0, trace1, trace2], layout);
+            Plotly.newPlot('sensor-plot', [trace0], layout);
         }
 
         // Update sensor data
@@ -277,15 +255,13 @@ html_template = '''
             fetch('/sensor_data')
                 .then(response => response.json())
                 .then(data => {
-                    // Update current values
+                    // Update current value
                     document.getElementById('ch0-value').textContent = data.current_values.channel_0.toFixed(2) + ' V';
-                    document.getElementById('ch1-value').textContent = data.current_values.channel_1.toFixed(2) + ' V';
-                    document.getElementById('ch2-value').textContent = data.current_values.channel_2.toFixed(2) + ' V';
                     
                     // Update plot
                     const update = {
-                        x: [data.timestamps, data.timestamps, data.timestamps],
-                        y: [data.channel_0, data.channel_1, data.channel_2]
+                        x: [data.timestamps],
+                        y: [data.channel_0]
                     };
                     Plotly.restyle('sensor-plot', update);
                 });
@@ -323,8 +299,8 @@ html_template = '''
 
         function clearPlot() {
             const update = {
-                x: [[], [], []],
-                y: [[], [], []]
+                x: [[]],
+                y: [[]]
             };
             Plotly.restyle('sensor-plot', update);
         }
