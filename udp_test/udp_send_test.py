@@ -15,13 +15,17 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 # -------------------------
 cap = cv2.VideoCapture(0)  # 0 = default webcam
 
+# Set lower resolution for Raspberry Pi
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+
 while True:
     ret, frame = cap.read()
     if not ret:
         continue
 
     # --- Encode frame as JPEG ---
-    ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+    ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
     if not ret:
         continue
 
