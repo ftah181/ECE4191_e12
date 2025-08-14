@@ -187,7 +187,7 @@ html_template = '''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Pi Camera & Single Sensor Monitor</title>
+    <title>Team E12 Web GUI</title>
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
@@ -207,7 +207,7 @@ html_template = '''
 </head>
 <body>
     <div class="container">
-        <h1>Pi Camera & Single Sensor Monitor</h1>
+        <h1>Team E12 Web GUI</h1>
         
         <!-- Camera Panel -->
         <div class="panel">
@@ -221,7 +221,7 @@ html_template = '''
         
         <!-- Sensor Panel -->
         <div class="panel">
-            <h2>Sensor Data (Channel 0)</h2>
+            <h2>Audio Data</h2>
             <div class="values">
                 <div class="value-box">
                     <div style="font-size: 18px; color: #666;">Current Reading</div>
@@ -242,7 +242,7 @@ html_template = '''
             const trace0 = { x: [], y: [], name: 'Channel 0', line: {color: 'red', width: 3} };
             
             const layout = {
-                title: 'Real-time Sensor Data (Channel 0)',
+                title: 'Microphone Channel',
                 xaxis: { title: 'Time (s)' },
                 yaxis: { title: 'Voltage (V)', range: [0, 3.3] }
             };
