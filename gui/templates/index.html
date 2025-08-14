@@ -2,7 +2,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Team E12 Web GUI</title>
+    <title>Team E12 Web GUI with Animal Detection</title>
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
@@ -13,16 +13,25 @@
         .button:hover { background: #0056b3; }
         .button.stop { background: #dc3545; }
         .button.stop:hover { background: #c82333; }
-        .values { display: flex; gap: 20px; margin: 20px 0; justify-content: center; }
+        .button.detection { background: #28a745; }
+        .button.detection:hover { background: #218838; }
+        .button.detection.disabled { background: #6c757d; }
+        .values { display: flex; gap: 20px; margin: 20px 0; justify-content: center; flex-wrap: wrap; }
         .value-box { background: #e9ecef; padding: 25px; border-radius: 8px; text-align: center; min-width: 150px; }
         .value-number { font-size: 32px; font-weight: bold; color: #007bff; margin-top: 10px; }
+        .detection-number { color: #28a745; }
         #camera-feed { max-width: 100%; height: 400px; background: #000; border-radius: 4px; }
         #sensor-plot { height: 400px; }
+        .detection-info { background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 10px 0; }
+        .detection-list { max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 14px; }
+        .status-indicator { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }
+        .status-active { background-color: #28a745; }
+        .status-inactive { background-color: #6c757d; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Team E12 Web GUI</h1>
+        <h1>Team E12 Web GUI with Animal Detection</h1>
         
         <!-- Camera Panel -->
         <div class="panel">
@@ -30,17 +39,33 @@
             <div class="controls">
                 <button id="start-camera" class="button" onclick="startCamera()">Start Camera</button>
                 <button id="stop-camera" class="button stop" onclick="stopCamera()">Stop Camera</button>
+                <button id="toggle-detection" class="button detection" onclick="toggleDetection()">
+                    <span class="status-indicator status-inactive" id="detection-status"></span>
+                    Enable Detection
+                </button>
             </div>
             <img id="camera-feed" src="/static/placeholder.jpg" alt="Camera feed will appear here">
+            
+            <!-- Detection Info -->
+            <div class="detection-info">
+                <h3>Animal Detection Status</h3>
+                <div id="detection-results" class="detection-list">
+                    Detection disabled. Click "Enable Detection" to start.
+                </div>
+            </div>
         </div>
         
         <!-- Sensor Panel -->
         <div class="panel">
-            <h2>Audio Data</h2>
+            <h2>Audio Data & Detection Summary</h2>
             <div class="values">
                 <div class="value-box">
                     <div style="font-size: 18px; color: #666;">Current Reading</div>
                     <div id="ch0-value" class="value-number">0.00 V</div>
+                </div>
+                <div class="value-box">
+                    <div style="font-size: 18px; color: #666;">Animals Detected</div>
+                    <div id="detection-count" class="value-number detection-number">0</div>
                 </div>
             </div>
             <div class="controls">
@@ -52,6 +77,8 @@
     </div>
 
     <script>
+        let detectionEnabled = false;
+        
         // Initialize plot
         function initPlot() {
             const trace0 = { x: [], y: [], name: 'Channel 0', line: {color: 'red', width: 3} };
@@ -81,6 +108,32 @@
                     Plotly.restyle('sensor-plot', update);
                 });
         }
+        
+        // Update detection data
+        function updateDetectionData() {
+            fetch('/detection_data')
+                .then(response => response.json())
+                .then(data => {
+                    // Update detection count
+                    document.getElementById('detection-count').textContent = data.count;
+                    
+                    // Update detection results
+                    const resultsDiv = document.getElementById('detection-results');
+                    if (data.enabled && data.predictions.length > 0) {
+                        let html = `Found ${data.predictions.length} animal(s):\n\n`;
+                        data.predictions.forEach((pred, index) => {
+                            html += `${index + 1}. ${pred.class} (${(pred.confidence * 100).toFixed(1)}%)\n`;
+                            html += `   Position: x=${pred.x.toFixed(0)}, y=${pred.y.toFixed(0)}\n`;
+                            html += `   Size: ${pred.width.toFixed(0)}x${pred.height.toFixed(0)}\n\n`;
+                        });
+                        resultsDiv.textContent = html;
+                    } else if (data.enabled) {
+                        resultsDiv.textContent = 'Detection active - no animals detected in current frame.';
+                    } else {
+                        resultsDiv.textContent = 'Detection disabled. Click "Enable Detection" to start.';
+                    }
+                });
+        }
 
         // Camera controls
         function startCamera() {
@@ -98,6 +151,35 @@
         function stopCamera() {
             fetch('/stop_camera');
             document.getElementById('camera-feed').src = '/static/placeholder.jpg';
+            // Also disable detection when camera stops
+            if (detectionEnabled) {
+                toggleDetection();
+            }
+        }
+        
+        function toggleDetection() {
+            const newState = !detectionEnabled;
+            fetch(`/toggle_detection/${newState}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        detectionEnabled = data.enabled;
+                        updateDetectionButton();
+                    }
+                });
+        }
+        
+        function updateDetectionButton() {
+            const button = document.getElementById('toggle-detection');
+            const status = document.getElementById('detection-status');
+            
+            if (detectionEnabled) {
+                button.innerHTML = '<span class="status-indicator status-active" id="detection-status"></span>Disable Detection';
+                status.className = 'status-indicator status-active';
+            } else {
+                button.innerHTML = '<span class="status-indicator status-inactive" id="detection-status"></span>Enable Detection';
+                status.className = 'status-indicator status-inactive';
+            }
         }
 
         function saveData() {
@@ -123,6 +205,8 @@
         // Initialize and start updates
         initPlot();
         setInterval(updateSensorData, 1000); // Update every second
+        setInterval(updateDetectionData, 1000); // Update detection every second
+        updateDetectionButton(); // Initialize button state
     </script>
 </body>
 </html>
