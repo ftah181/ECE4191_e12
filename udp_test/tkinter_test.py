@@ -6,11 +6,21 @@ import socket
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import random
+import os
+from inference_sdk import InferenceHTTPClient
+
+# --- Setup Roboflow client ---
+client = InferenceHTTPClient(
+    api_url="https://serverless.roboflow.com",
+    api_key="lnHqcMh4NynT1If5FC38"  # Replace with your actual key
+)
+
+
 
 # -------------------------
 # Simulated Model Prediction
 # -------------------------
-def model_predict(frame):
+def model_predict_sim(frame):
     """
     Simulate a model that outputs bounding boxes on the frame.
     Replace this with your actual model inference code.
@@ -22,6 +32,61 @@ def model_predict(frame):
     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
     cv2.putText(frame, "Class A", (x1, y1-10),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    return frame
+
+# -------------------------
+# Inference Model
+# -------------------------
+def model_predict(frame):
+    """
+    Run inference on frame using Roboflow model
+    """
+    try:
+        # Save frame temporarily for inference (Roboflow SDK expects file path or PIL Image)
+        import tempfile
+        import os
+        
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
+            temp_path = temp_file.name
+            # Save frame as temporary image
+            cv2.imwrite(temp_path, frame)
+        
+        # Run inference with the temporary file path
+        result = client.infer(temp_path, model_id="animal-detection-evlon/1")
+        
+        # Clean up temporary file
+        os.unlink(temp_path)
+
+    except Exception as e:
+        print(f"Inference error: {e}")    
+        
+    # Draw bounding boxes from results
+    try:
+        for pred in result.get("predictions", []):
+            x, y, w, h = pred["x"], pred["y"], pred["width"], pred["height"]
+            class_name = pred["class"]
+            confidence = pred["confidence"]
+
+            # Convert x, y, w, h to top-left and bottom-right points
+            x1 = int(x - w / 2)
+            y1 = int(y - h / 2)
+            x2 = int(x + w / 2)
+            y2 = int(y + h / 2)
+
+            # Draw rectangle
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            label = f"{class_name} ({confidence:.2f})"
+            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5, (0, 255, 0), 2)
+    
+    except Exception as draw_error:
+        print(f"Error drawing bounding boxes: {draw_error}")
+        # Continue without bounding boxes if drawing fails
+        
+        print(f"Inference successful: {len(result.get('predictions', []))} detections")
+        
+    
     return frame
 
 # -------------------------
@@ -73,8 +138,10 @@ class UDPVideoApp:
             frame = cv2.imdecode(npdata, cv2.IMREAD_COLOR)
             
             if frame is not None:
-                frame = model_predict(frame)  # insert model prediction here
+                # frame = model_predict_sim(frame)  # insert model prediction here
                 
+                frame = model_predict(frame)
+
                 # Convert to make compatible with Tkinter
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 img = Image.fromarray(frame)

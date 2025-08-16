@@ -5,7 +5,7 @@ import numpy as np
 # -------------------------
 # UDP Target Settings
 # -------------------------
-UDP_IP = "118.138.103.246"  # Change to your laptop's IP if on a network
+UDP_IP = "192.168.1.119"  # Change to your laptop's IP if on a network
 UDP_PORT = 5005
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
