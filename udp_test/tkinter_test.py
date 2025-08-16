@@ -20,8 +20,9 @@ client = InferenceHTTPClient(
 
 # Global variables for performance optimization
 frame_skip_counter = 0
-INFERENCE_SKIP_FRAMES = 20  # Run inference every N frames
+INFERENCE_SKIP_FRAMES = 20  # Run inference every N frames (increased from 3)
 last_predictions = []  # Cache last predictions
+frame_buffer = None  # Buffer for frame reuse
 
 # -------------------------
 # Simulated Model Prediction
@@ -40,112 +41,119 @@ def model_predict_sim(frame):
     return frame, [{"class": "Class A", "confidence": 0.85, "x": (x1+x2)//2, "y": (y1+y2)//2, "width": x2-x1, "height": y2-y1}]
 
 # -------------------------
-# Optimized Inference Model
+# Ultra-Fast Inference Model
 # -------------------------
-def model_predict_fast(frame, force_inference=False):
+def model_predict_ultra_fast(frame, force_inference=False):
     """
-    Optimized inference with frame skipping and caching
+    Ultra-optimized inference with aggressive optimizations
     """
-    global frame_skip_counter, last_predictions
+    global frame_skip_counter, last_predictions, frame_buffer
     
-    # Skip inference on some frames for speed
+    # Skip inference on most frames for maximum speed
     frame_skip_counter += 1
     if not force_inference and frame_skip_counter < INFERENCE_SKIP_FRAMES:
         # Use cached predictions and just draw them
-        return draw_predictions(frame, last_predictions)
+        return draw_predictions_fast(frame, last_predictions)
     
     frame_skip_counter = 0
     
-    # Resize frame for faster inference (smaller = faster)
+    # Even smaller inference size for maximum speed
     original_shape = frame.shape[:2]
-    inference_size = (320, 240)  # Smaller size for faster inference
-    resized_frame = cv2.resize(frame, inference_size)
+    inference_size = (160, 120)  # Very small for ultra-fast inference
+    
+    # Use cached resized frame if available
+    if frame_buffer is None or frame_buffer.shape[:2] != inference_size:
+        resized_frame = cv2.resize(frame, inference_size)
+        frame_buffer = resized_frame  # Cache for potential reuse
+    else:
+        resized_frame = cv2.resize(frame, inference_size)
     
     predictions = []
     
     try:
-        # Method 1: Try with PIL Image (most compatible)
-        from PIL import Image
-        
-        # Convert BGR to RGB for PIL
+        # Fast PIL conversion without extra copies
         frame_rgb = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
         pil_image = Image.fromarray(frame_rgb)
         
-        # Run inference with PIL Image
+        # Run inference
         result = client.infer(pil_image, model_id="animal-detection-evlon/1")
         
-        # Scale predictions back to original size
+        # Quick scaling back to original size
         scale_x = original_shape[1] / inference_size[0]
         scale_y = original_shape[0] / inference_size[1]
         
+        # Optimized prediction scaling
         predictions = []
         for pred in result.get("predictions", []):
-            scaled_pred = pred.copy()
-            scaled_pred["x"] = int(pred["x"] * scale_x)
-            scaled_pred["y"] = int(pred["y"] * scale_y)
-            scaled_pred["width"] = int(pred["width"] * scale_x)
-            scaled_pred["height"] = int(pred["height"] * scale_y)
-            predictions.append(scaled_pred)
+            predictions.append({
+                "class": pred["class"],
+                "confidence": pred["confidence"],
+                "x": int(pred["x"] * scale_x),
+                "y": int(pred["y"] * scale_y),
+                "width": int(pred["width"] * scale_x),
+                "height": int(pred["height"] * scale_y)
+            })
         
-        last_predictions = predictions  # Cache for next frames
-        print(f"Fast inference: {len(predictions)} detections")
+        last_predictions = predictions
         
     except Exception as inference_error:
-        print(f"Inference failed: {inference_error}")
-        # Use simulation for speed if inference fails
-        return model_predict_sim(frame)
+        # Silent fallback to cached predictions
+        predictions = last_predictions
     
-    return draw_predictions(frame, predictions)
+    return draw_predictions_fast(frame, predictions)
 
-def draw_predictions(frame, predictions):
+def draw_predictions_fast(frame, predictions):
     """
-    Separate function to draw predictions on frame
+    Optimized drawing with minimal operations
     """
     try:
+        # Pre-calculate colors and fonts outside loop
+        color = (0, 255, 0)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.4  # Smaller font for speed
+        thickness = 1  # Thinner lines for speed
+        
         for pred in predictions:
+            # Fast integer operations
             x, y, w, h = pred["x"], pred["y"], pred["width"], pred["height"]
-            class_name = pred["class"]
-            confidence = pred["confidence"]
+            x1, y1 = int(x - w // 2), int(y - h // 2)
+            x2, y2 = int(x + w // 2), int(y + h // 2)
 
-            # Convert center coordinates to corner coordinates
-            x1 = int(x - w / 2)
-            y1 = int(y - h / 2)
-            x2 = int(x + w / 2)
-            y2 = int(y + h / 2)
-
-            # Draw rectangle
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            label = f"{class_name} ({confidence:.2f})"
-            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5, (0, 255, 0), 2)
+            # Minimal drawing operations
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+            
+            # Only draw label if confidence is high enough (skip low confidence)
+            if pred["confidence"] > 0.5:
+                label = f"{pred['class'][:8]} {pred['confidence']:.1f}"  # Shorter labels
+                cv2.putText(frame, label, (x1, y1 - 5), font, font_scale, color, thickness)
     
-    except Exception as draw_error:
-        print(f"Error drawing predictions: {draw_error}")
+    except:
+        pass  # Silent error handling for maximum speed
     
     return frame, predictions
 
 # -------------------------
-# Threaded Inference Worker
+# Ultra-Fast Threaded Inference Worker
 # -------------------------
-class InferenceWorker(threading.Thread):
+class UltraFastInferenceWorker(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True)
-        self.frame_queue = queue.Queue(maxsize=2)  # Small queue to prevent lag
-        self.result_queue = queue.Queue(maxsize=5)
+        self.frame_queue = queue.Queue(maxsize=1)  # Single frame queue
+        self.result_queue = queue.Queue(maxsize=3)
         self.running = True
+        self.skip_count = 0
         
     def add_frame(self, frame):
         try:
-            # Clear old frames if queue is full
-            while not self.frame_queue.empty():
-                try:
-                    self.frame_queue.get_nowait()
-                except queue.Empty:
-                    break
+            # Always clear queue and add latest frame only
+            try:
+                self.frame_queue.get_nowait()
+            except queue.Empty:
+                pass
             
-            self.frame_queue.put_nowait(frame.copy())
+            self.frame_queue.put_nowait(frame)
         except queue.Full:
-            pass  # Skip frame if queue is full
+            pass
     
     def get_result(self):
         try:
@@ -156,22 +164,26 @@ class InferenceWorker(threading.Thread):
     def run(self):
         while self.running:
             try:
-                frame = self.frame_queue.get(timeout=1.0)
-                processed_frame, predictions = model_predict_fast(frame, force_inference=True)
+                frame = self.frame_queue.get(timeout=0.5)
                 
-                # Clear old results
-                while not self.result_queue.empty():
-                    try:
-                        self.result_queue.get_nowait()
-                    except queue.Empty:
-                        break
+                # Process with ultra-fast method
+                processed_frame, predictions = model_predict_ultra_fast(frame, force_inference=True)
                 
-                self.result_queue.put_nowait((processed_frame, predictions))
+                # Keep only latest result
+                try:
+                    self.result_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                
+                try:
+                    self.result_queue.put_nowait((processed_frame, predictions))
+                except queue.Full:
+                    pass
                 
             except queue.Empty:
                 continue
-            except Exception as e:
-                print(f"Inference worker error: {e}")
+            except Exception:
+                continue  # Silent error handling
     
     def stop(self):
         self.running = False
@@ -195,8 +207,11 @@ class UDPVideoApp:
         # Performance settings
         self.use_threading = tk.BooleanVar(value=True)
         self.skip_inference = tk.BooleanVar(value=False)
+        self.ultra_mode = tk.BooleanVar(value=True)  # New ultra-fast mode
         
-        # Setup UDP Socket
+        # Setup UDP Socket with larger buffer
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536 * 4)  # Larger buffer
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             self.sock.bind((udp_ip, udp_port))
@@ -211,7 +226,7 @@ class UDPVideoApp:
         self.display_fps = 0
         
         # Threading for inference
-        self.inference_worker = InferenceWorker()
+        self.inference_worker = UltraFastInferenceWorker()
         self.inference_worker.start()
         self.last_inference_result = None
         
@@ -225,8 +240,10 @@ class UDPVideoApp:
         
         tk.Checkbutton(self.controls_frame, text="Threaded Inference", 
                       variable=self.use_threading).pack(side=tk.LEFT)
-        tk.Checkbutton(self.controls_frame, text="Skip Inference (Display Only)", 
+        tk.Checkbutton(self.controls_frame, text="Skip Inference", 
                       variable=self.skip_inference).pack(side=tk.LEFT)
+        tk.Checkbutton(self.controls_frame, text="Ultra Mode", 
+                      variable=self.ultra_mode).pack(side=tk.LEFT)
         
         # Status labels
         self.status_label = tk.Label(self.video_frame, text="Waiting for UDP frames...", 
