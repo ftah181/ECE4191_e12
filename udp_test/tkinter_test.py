@@ -10,6 +10,7 @@ import os
 import threading
 import queue
 import time
+import json
 from inference_sdk import InferenceHTTPClient
 
 # --- Setup Roboflow client ---
@@ -189,19 +190,84 @@ class UltraFastInferenceWorker(threading.Thread):
         self.running = False
 
 # -------------------------
-# Simulated Voltage (optimized)
+# ADC Data Receiver Thread
 # -------------------------
-def get_voltage():
-    """Simulate reading a voltage value."""
-    return random.uniform(0, 5)
+class ADCReceiver(threading.Thread):
+    def __init__(self, udp_port=5006):
+        super().__init__(daemon=True)
+        self.udp_port = udp_port
+        self.running = True
+        self.latest_voltage = 0.0
+        self.data_queue = queue.Queue(maxsize=100)
+        
+        # Setup UDP socket for ADC data
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            self.sock.bind(("0.0.0.0", udp_port))
+            self.sock.settimeout(0.1)  # Non-blocking with timeout
+            print(f"ADC UDP socket bound to port {udp_port}")
+        except Exception as e:
+            print(f"ADC socket binding error: {e}")
+    
+    def get_latest_voltage(self):
+        return self.latest_voltage
+    
+    def get_voltage_data(self):
+        """Get all queued voltage data"""
+        data = []
+        try:
+            while True:
+                data.append(self.data_queue.get_nowait())
+        except queue.Empty:
+            pass
+        return data
+    
+    def run(self):
+        while self.running:
+            try:
+                data, addr = self.sock.recvfrom(1024)
+                json_str = data.decode('utf-8')
+                adc_data = json.loads(json_str)
+                
+                # Update latest voltage
+                self.latest_voltage = adc_data.get('voltage', 0.0)
+                
+                # Add to queue for plotting
+                try:
+                    self.data_queue.put_nowait({
+                        'voltage': self.latest_voltage,
+                        'timestamp': adc_data.get('timestamp', time.time())
+                    })
+                except queue.Full:
+                    # Remove oldest data if queue is full
+                    try:
+                        self.data_queue.get_nowait()
+                        self.data_queue.put_nowait({
+                            'voltage': self.latest_voltage,
+                            'timestamp': adc_data.get('timestamp', time.time())
+                        })
+                    except:
+                        pass
+                        
+            except socket.timeout:
+                continue
+            except Exception as e:
+                continue  # Silent error handling
+    
+    def stop(self):
+        self.running = False
+        if hasattr(self, 'sock'):
+            self.sock.close()
+
+
 
 # -------------------------
 # Optimized Tkinter GUI
 # -------------------------
 class UDPVideoApp:
-    def __init__(self, root, udp_ip="0.0.0.0", udp_port=5005):
+    def __init__(self, root, udp_ip="0.0.0.0", video_port=5005, adc_port=5006):
         self.root = root
-        self.root.title("Model Output Display - Optimized")
+        self.root.title("UDP Video + ADC Display")
         self.root.geometry("1400x700")  # Larger window for bigger video display
 
         # Performance settings
@@ -209,16 +275,19 @@ class UDPVideoApp:
         self.skip_inference = tk.BooleanVar(value=False)
         self.ultra_mode = tk.BooleanVar(value=True)  # New ultra-fast mode
         
-        # Setup UDP Socket with larger buffer
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536 * 4)  # Larger buffer
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Setup Video UDP Socket with larger buffer
+        self.video_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.video_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536 * 4)
         try:
-            self.sock.bind((udp_ip, udp_port))
-            self.sock.setblocking(False)
-            print(f"UDP socket bound to {udp_ip}:{udp_port}")
+            self.video_sock.bind((udp_ip, video_port))
+            self.video_sock.setblocking(False)
+            print(f"Video UDP socket bound to {udp_ip}:{video_port}")
         except Exception as e:
-            print(f"Socket binding error: {e}")
+            print(f"Video socket binding error: {e}")
+        
+        # Setup ADC receiver thread
+        self.adc_receiver = ADCReceiver(adc_port)
+        self.adc_receiver.start()
 
         # Performance monitoring
         self.fps_counter = 0
@@ -253,6 +322,11 @@ class UDPVideoApp:
         self.fps_label = tk.Label(self.video_frame, text="FPS: 0", 
                                 font=("Arial", 10), fg="blue")
         self.fps_label.pack()
+        
+        # ADC status label
+        self.adc_status_label = tk.Label(self.video_frame, text="ADC: Waiting...", 
+                                       font=("Arial", 10), fg="green")
+        self.adc_status_label.pack()
 
         # Video display with proper sizing
         self.video_label = tk.Label(self.video_frame, bg="black")
@@ -268,6 +342,12 @@ class UDPVideoApp:
         self.webcam_checkbox = tk.Checkbutton(self.video_frame, text="Use Webcam for Testing", 
                                             variable=self.use_webcam)
         self.webcam_checkbox.pack()
+        
+        # Fallback voltage toggle
+        self.use_fallback_voltage = tk.BooleanVar()
+        self.voltage_checkbox = tk.Checkbutton(self.video_frame, text="Use Simulated ADC (fallback)", 
+                                             variable=self.use_fallback_voltage)
+        self.voltage_checkbox.pack()
         
         # Initialize webcam capture (for testing)
         self.cap = None
@@ -285,20 +365,21 @@ class UDPVideoApp:
             print("Could not initialize webcam")
             self.cap = None
 
-        # --- Optimized Voltage Graph ---
-        self.fig, self.ax = plt.subplots(figsize=(4, 3))  # Smaller plot
-        self.ax.set_ylim(0, 5)
-        self.ax.set_title("Voltage vs Time")
+        # --- Voltage Graph Setup ---
+        self.fig, self.ax = plt.subplots(figsize=(5, 3))
+        self.ax.set_ylim(0, 3.5)  # Adjusted for 3.3V range
+        self.ax.set_title("ADC Voltage vs Time")
         self.ax.set_xlabel("Time")
         self.ax.set_ylabel("Voltage (V)")
         self.x_data = []
         self.y_data = []
-        self.line, = self.ax.plot([], [], 'r-')
+        self.line, = self.ax.plot([], [], 'r-', linewidth=2)
         self.canvas = FigureCanvasTkAgg(self.fig, master=root)
         self.canvas.get_tk_widget().pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
         
-        # Voltage update counter (update less frequently)
+        # Voltage update counter
         self.voltage_update_counter = 0
+        self.plot_time_offset = time.time()
 
         self.update()  # start loop
     
@@ -318,12 +399,12 @@ class UDPVideoApp:
         
         # Try to get frame from UDP first
         try:
-            data, addr = self.sock.recvfrom(65536)
+            data, addr = self.video_sock.recvfrom(65536)
             npdata = np.frombuffer(data, dtype=np.uint8)
             frame = cv2.imdecode(npdata, cv2.IMREAD_COLOR)
             
             if frame is not None:
-                self.status_label.config(text=f"UDP: {addr[0]}:{addr[1]}")
+                self.status_label.config(text=f"Video UDP: {addr[0]}:{addr[1]}")
                 self.frame_count += 1
         except socket.error:
             pass
@@ -357,7 +438,7 @@ class UDPVideoApp:
                         processed_frame = frame
                 else:
                     # Direct inference (slower)
-                    processed_frame, _ = model_predict_fast(frame)
+                    processed_frame, _ = model_predict_ultra_fast(frame)
                 
                 # Resize for display if too large
                 display_frame = self.resize_for_display(processed_frame)
@@ -376,20 +457,46 @@ class UDPVideoApp:
             except Exception as e:
                 print(f"Frame processing error: {e}")
 
-        # Update voltage plot less frequently for better performance
+        # Update voltage plot
         self.voltage_update_counter += 1
-        if self.voltage_update_counter >= 3:  # Update every 3 frames
+        if self.voltage_update_counter >= 5:  # Update every 5 frames for smoother plotting
             self.voltage_update_counter = 0
             try:
-                voltage = get_voltage()
-                if len(self.x_data) >= 50:  # Smaller buffer
-                    self.x_data = self.x_data[1:]
-                    self.y_data = self.y_data[1:]
-                self.x_data.append(len(self.x_data))
-                self.y_data.append(voltage)
-                self.line.set_data(self.x_data, self.y_data)
-                self.ax.set_xlim(0, max(50, len(self.x_data)))
-                self.canvas.draw()
+                # Get voltage data from ADC receiver
+                voltage_data_list = self.adc_receiver.get_voltage_data()
+                
+                if voltage_data_list:
+                    # Process all received voltage data
+                    for voltage_data in voltage_data_list:
+                        voltage = voltage_data['voltage']
+                        
+                        # Add to plot data
+                        current_time = time.time() - self.plot_time_offset
+                        if len(self.x_data) >= 100:  # Keep last 100 points
+                            self.x_data = self.x_data[1:]
+                            self.y_data = self.y_data[1:]
+                        
+                        self.x_data.append(current_time)
+                        self.y_data.append(voltage)
+                    
+                    # Update status with latest voltage
+                    latest_voltage = self.adc_receiver.get_latest_voltage()
+                    self.adc_status_label.config(text=f"ADC: {latest_voltage:.3f}V (UDP)")
+                    
+                    # Update plot
+                    if len(self.x_data) > 0:
+                        self.line.set_data(self.x_data, self.y_data)
+                        if len(self.x_data) > 1:
+                            self.ax.set_xlim(min(self.x_data), max(self.x_data))
+                        self.canvas.draw_idle()  # Use draw_idle for better performance
+                else:
+                    # No new UDP data, just update status
+                    latest_voltage = self.adc_receiver.get_latest_voltage()
+                    if latest_voltage > 0:
+                        self.adc_status_label.config(text=f"ADC: {latest_voltage:.3f}V (UDP)")
+                    else:
+                        self.adc_status_label.config(text="ADC: Waiting for UDP data...")
+                    
             except Exception as e:
                 print(f"Plot update error: {e}")
 
@@ -419,17 +526,19 @@ class UDPVideoApp:
     def __del__(self):
         if hasattr(self, 'inference_worker'):
             self.inference_worker.stop()
+        if hasattr(self, 'adc_receiver'):
+            self.adc_receiver.stop()
         if hasattr(self, 'cap') and self.cap is not None:
             self.cap.release()
-        if hasattr(self, 'sock'):
-            self.sock.close()
+        if hasattr(self, 'video_sock'):
+            self.video_sock.close()
 
 # -------------------------
 # Run
 # -------------------------
 if __name__ == "__main__":
     root = tk.Tk()
-    app = UDPVideoApp(root)
+    app = UDPVideoApp(root, video_port=5005, adc_port=5006)
     
     try:
         root.mainloop()
@@ -438,7 +547,9 @@ if __name__ == "__main__":
     finally:
         if hasattr(app, 'inference_worker'):
             app.inference_worker.stop()
+        if hasattr(app, 'adc_receiver'):
+            app.adc_receiver.stop()
         if hasattr(app, 'cap') and app.cap is not None:
             app.cap.release()
-        if hasattr(app, 'sock'):
-            app.sock.close()
+        if hasattr(app, 'video_sock'):
+            app.video_sock.close()
