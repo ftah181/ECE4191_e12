@@ -1,0 +1,19 @@
+names:
+- cockatoo
+- crocodile
+- frog
+- kangaroo
+- koala
+- platypus
+- tassie devil
+- wombat
+nc: 8
+roboflow:
+  license: CC BY 4.0
+  project: animal-detection-evlon
+  url: https://universe.roboflow.com/4191/animal-detection-evlon/dataset/3
+  version: 3
+  workspace: 4191
+test: ../test/images
+train: ../train/images
+val: ../valid/images

@@ -11,13 +11,25 @@ import threading
 import queue
 import time
 import json
+from inference import get_model
 from inference_sdk import InferenceHTTPClient
+from roboflow import Roboflow
+from ultralytics import YOLO
 
 # --- Setup Roboflow client ---
-client = InferenceHTTPClient(
-    api_url="https://serverless.roboflow.com",
-    api_key="lnHqcMh4NynT1If5FC38"  # Replace with your actual key
-)
+# client = InferenceHTTPClient(
+#     api_url="https://serverless.roboflow.com",
+#     api_key="lnHqcMh4NynT1If5FC38"  # Replace with your actual key
+# )
+
+model = get_model("animal-detection-evlon/1", api_key="lnHqcMh4NynT1If5FC38")
+
+rf = Roboflow(api_key="lnHqcMh4NynT1If5FC38")
+project = rf.workspace("4191").project("animal-detection-evlon")
+version = project.version(3)
+dataset = version.download("yolov8")
+model_path = dataset.location + "/model/best.pt"
+model = YOLO(model_path)
 
 # Global variables for performance optimization
 frame_skip_counter = 0
@@ -77,7 +89,8 @@ def model_predict_ultra_fast(frame, force_inference=False):
         pil_image = Image.fromarray(frame_rgb)
         
         # Run inference
-        result = client.infer(pil_image, model_id="animal-detection-evlon/1")
+        result = model(pil_image)
+        print(result)
         
         # Quick scaling back to original size
         scale_x = original_shape[1] / inference_size[0]
