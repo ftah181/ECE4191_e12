@@ -80,18 +80,7 @@ def model_predict_ultra_fast(frame, force_inference=False):
         # Convert frame for inference
         frame_rgb = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
         
-        # Save temporary image for inference
-        temp_filename = "temp_frame.jpg"
-        cv2.imwrite(temp_filename, resized_frame)
-        
-        # Run inference using new method
-        results = model.infer(temp_filename)
-        
-        # Clean up temporary file
-        try:
-            os.remove(temp_filename)
-        except:
-            pass
+        results = model.infer(frame_rgb)
         
         # Quick scaling back to original size
         scale_x = original_shape[1] / inference_size[0]
