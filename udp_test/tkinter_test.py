@@ -14,7 +14,6 @@ import json
 from inference import get_model
 from inference_sdk import InferenceHTTPClient
 from roboflow import Roboflow
-from ultralytics import YOLO
 
 # --- Setup Roboflow client ---
 # client = InferenceHTTPClient(
@@ -22,14 +21,8 @@ from ultralytics import YOLO
 #     api_key="lnHqcMh4NynT1If5FC38"  # Replace with your actual key
 # )
 
-model = get_model("animal-detection-evlon/1", api_key="lnHqcMh4NynT1If5FC38")
-
-rf = Roboflow(api_key="lnHqcMh4NynT1If5FC38")
-project = rf.workspace("4191").project("animal-detection-evlon")
-version = project.version(3)
-dataset = version.download("yolov8")
-model_path = dataset.location + "/model/best.pt"
-model = YOLO(model_path)
+# Load model
+model = get_model("animal-detection-evlon/3", api_key="lnHqcMh4NynT1If5FC38")
 
 # Global variables for performance optimization
 frame_skip_counter = 0
@@ -58,7 +51,7 @@ def model_predict_sim(frame):
 # -------------------------
 def model_predict_ultra_fast(frame, force_inference=False):
     """
-    Ultra-optimized inference with aggressive optimizations
+    Ultra-optimized inference with aggressive optimizations using new Roboflow method
     """
     global frame_skip_counter, last_predictions, frame_buffer
     
@@ -84,33 +77,54 @@ def model_predict_ultra_fast(frame, force_inference=False):
     predictions = []
     
     try:
-        # Fast PIL conversion without extra copies
+        # Convert frame for inference
         frame_rgb = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(frame_rgb)
         
-        # Run inference
-        result = model(pil_image)
-        print(result)
+        # Save temporary image for inference
+        temp_filename = "temp_frame.jpg"
+        cv2.imwrite(temp_filename, resized_frame)
+        
+        # Run inference using new method
+        results = model.infer(temp_filename)
+        
+        # Clean up temporary file
+        try:
+            os.remove(temp_filename)
+        except:
+            pass
         
         # Quick scaling back to original size
         scale_x = original_shape[1] / inference_size[0]
         scale_y = original_shape[0] / inference_size[1]
         
-        # Optimized prediction scaling
+        # Process results - Handle list of ObjectDetectionInferenceResponse objects
         predictions = []
-        for pred in result.get("predictions", []):
-            predictions.append({
-                "class": pred["class"],
-                "confidence": pred["confidence"],
-                "x": int(pred["x"] * scale_x),
-                "y": int(pred["y"] * scale_y),
-                "width": int(pred["width"] * scale_x),
-                "height": int(pred["height"] * scale_y)
-            })
+        for response in results:
+            # Process each prediction in this response
+            for prediction in response.predictions:
+                # Get coordinates and info from the prediction object
+                x = prediction.x
+                y = prediction.y
+                width = prediction.width
+                height = prediction.height
+                confidence = prediction.confidence
+                class_name = prediction.class_name
+                
+                # Scale coordinates back to original frame size
+                scaled_prediction = {
+                    "class": class_name,
+                    "confidence": confidence,
+                    "x": int(x * scale_x),
+                    "y": int(y * scale_y),
+                    "width": int(width * scale_x),
+                    "height": int(height * scale_y)
+                }
+                predictions.append(scaled_prediction)
         
         last_predictions = predictions
         
     except Exception as inference_error:
+        print(f"Inference error: {inference_error}")
         # Silent fallback to cached predictions
         predictions = last_predictions
     
@@ -124,8 +138,8 @@ def draw_predictions_fast(frame, predictions):
         # Pre-calculate colors and fonts outside loop
         color = (0, 255, 0)
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.4  # Smaller font for speed
-        thickness = 1  # Thinner lines for speed
+        font_scale = 1  # Smaller font for speed
+        thickness = 2  # Thinner lines for speed
         
         for pred in predictions:
             # Fast integer operations
