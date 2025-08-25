@@ -15,12 +15,6 @@ from inference import get_model
 from inference_sdk import InferenceHTTPClient
 from roboflow import Roboflow
 
-# --- Setup Roboflow client ---
-# client = InferenceHTTPClient(
-#     api_url="https://serverless.roboflow.com",
-#     api_key="lnHqcMh4NynT1If5FC38"  # Replace with your actual key
-# )
-
 # Load model
 model = get_model("animal-detection-evlon/3", api_key="lnHqcMh4NynT1If5FC38")
 
@@ -47,49 +41,34 @@ def model_predict_sim(frame):
     return frame, [{"class": "Class A", "confidence": 0.85, "x": (x1+x2)//2, "y": (y1+y2)//2, "width": x2-x1, "height": y2-y1}]
 
 # -------------------------
-# Ultra-Fast Inference Model
+#  Run Inference Model
 # -------------------------
 def model_predict_ultra_fast(frame, force_inference=False):
-    """
-    Ultra-optimized inference with aggressive optimizations using new Roboflow method
-    """
-    global frame_skip_counter, last_predictions, frame_buffer
+
+    global frame_skip_counter, last_predictions
     
-    # Skip inference on most frames for maximum speed
+    # Skip inference on some frames
     frame_skip_counter += 1
     if not force_inference and frame_skip_counter < INFERENCE_SKIP_FRAMES:
-        # Use cached predictions and just draw them
+        # Use cached predictions
         return draw_predictions_fast(frame, last_predictions)
     
     frame_skip_counter = 0
     
-    # Even smaller inference size for maximum speed
-    original_shape = frame.shape[:2]
-    inference_size = (160, 120)  # Very small for ultra-fast inference
-    
-    # Use cached resized frame if available
-    if frame_buffer is None or frame_buffer.shape[:2] != inference_size:
-        resized_frame = cv2.resize(frame, inference_size)
-        frame_buffer = resized_frame  # Cache for potential reuse
-    else:
-        resized_frame = cv2.resize(frame, inference_size)
-    
     predictions = []
     
     try:
-        # Convert frame for inference
-        frame_rgb = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
+        # Convert frame to RGB
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
+        # Run inference
         results = model.infer(frame_rgb)
-        
-        # Quick scaling back to original size
-        scale_x = original_shape[1] / inference_size[0]
-        scale_y = original_shape[0] / inference_size[1]
         
         # Process results - Handle list of ObjectDetectionInferenceResponse objects
         predictions = []
         for response in results:
             # Process each prediction in this response
+
             for prediction in response.predictions:
                 # Get coordinates and info from the prediction object
                 x = prediction.x
@@ -99,16 +78,15 @@ def model_predict_ultra_fast(frame, force_inference=False):
                 confidence = prediction.confidence
                 class_name = prediction.class_name
                 
-                # Scale coordinates back to original frame size
-                scaled_prediction = {
+                prediction_dict = {
                     "class": class_name,
                     "confidence": confidence,
-                    "x": int(x * scale_x),
-                    "y": int(y * scale_y),
-                    "width": int(width * scale_x),
-                    "height": int(height * scale_y)
+                    "x": int(x),
+                    "y": int(y),
+                    "width": int(width),
+                    "height": int(height)
                 }
-                predictions.append(scaled_prediction)
+                predictions.append(prediction_dict)
         
         last_predictions = predictions
         
@@ -119,33 +97,36 @@ def model_predict_ultra_fast(frame, force_inference=False):
     
     return draw_predictions_fast(frame, predictions)
 
+# -------------------------
+#  Overlay Bounding Boxes
+# -------------------------
 def draw_predictions_fast(frame, predictions):
     """
     Optimized drawing with minimal operations
     """
     try:
-        # Pre-calculate colors and fonts outside loop
+        # Set bounding box colour and font
         color = (0, 255, 0)
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 1  # Smaller font for speed
-        thickness = 2  # Thinner lines for speed
+        font_scale = 1
+        thickness = 2
         
         for pred in predictions:
-            # Fast integer operations
+            # Extract bounding box
             x, y, w, h = pred["x"], pred["y"], pred["width"], pred["height"]
             x1, y1 = int(x - w // 2), int(y - h // 2)
             x2, y2 = int(x + w // 2), int(y + h // 2)
 
-            # Minimal drawing operations
+            # Draw bounding box over frame
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
             
             # Only draw label if confidence is high enough (skip low confidence)
-            if pred["confidence"] > 0.5:
+            if pred["confidence"] > 0.3:
                 label = f"{pred['class'][:8]} {pred['confidence']:.1f}"  # Shorter labels
                 cv2.putText(frame, label, (x1, y1 - 5), font, font_scale, color, thickness)
     
     except:
-        pass  # Silent error handling for maximum speed
+        pass
     
     return frame, predictions
 
@@ -284,10 +265,10 @@ class UDPVideoApp:
     def __init__(self, root, udp_ip="0.0.0.0", video_port=5005, adc_port=5006):
         self.root = root
         self.root.title("UDP Video + ADC Display")
-        self.root.geometry("1400x700")  # Larger window for bigger video display
+        self.root.geometry("1400x800")  # Adjusted height for new layout
+        self.root.configure(bg='#2C3E50')
 
         # Performance settings
-        self.use_threading = tk.BooleanVar(value=True)
         self.skip_inference = tk.BooleanVar(value=False)
         self.ultra_mode = tk.BooleanVar(value=True)  # New ultra-fast mode
         
@@ -310,21 +291,32 @@ class UDPVideoApp:
         self.fps_start_time = time.time()
         self.display_fps = 0
         
-        # Threading for inference
+        # Threading for inference (always enabled)
         self.inference_worker = UltraFastInferenceWorker()
         self.inference_worker.start()
         self.last_inference_result = None
         
-        # Frame for video and controls
-        self.video_frame = tk.Frame(root)
-        self.video_frame.pack(side=tk.LEFT, padx=10, pady=10)
+        # Main layout: Left side for video and graph, right side reserved
+        self.left_frame = tk.Frame(root, bg='#2C3E50')
+        self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=10, pady=10)
+        
+        self.right_frame = tk.Frame(root, bg='#34495E', width=400)
+        self.right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.right_frame.pack_propagate(False)  # Maintain fixed width
+        
+        # Placeholder label for future content
+        self.right_placeholder = tk.Label(self.right_frame, text="Reserved Space\nfor Future Features", 
+                                         font=("Arial", 12), bg='#34495E', fg='white')
+        self.right_placeholder.pack(expand=True)
+        
+        # Top left: Video frame
+        self.video_frame = tk.Frame(self.left_frame, bg='#2C3E50')
+        self.video_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 10))
         
         # Performance controls
         self.controls_frame = tk.Frame(self.video_frame)
         self.controls_frame.pack()
         
-        tk.Checkbutton(self.controls_frame, text="Threaded Inference", 
-                      variable=self.use_threading).pack(side=tk.LEFT)
         tk.Checkbutton(self.controls_frame, text="Skip Inference", 
                       variable=self.skip_inference).pack(side=tk.LEFT)
         tk.Checkbutton(self.controls_frame, text="Ultra Mode", 
@@ -353,45 +345,24 @@ class UDPVideoApp:
         self.frame_counter_label = tk.Label(self.video_frame, text="Frames: 0")
         self.frame_counter_label.pack()
         
-        # Testing mode toggle
-        self.use_webcam = tk.BooleanVar()
-        self.webcam_checkbox = tk.Checkbutton(self.video_frame, text="Use Webcam for Testing", 
-                                            variable=self.use_webcam)
-        self.webcam_checkbox.pack()
+        # Bottom left: Voltage Graph
+        self.graph_frame = tk.Frame(self.left_frame, bg='#2C3E50')
+        self.graph_frame.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
         
-        # Fallback voltage toggle
-        self.use_fallback_voltage = tk.BooleanVar()
-        self.voltage_checkbox = tk.Checkbutton(self.video_frame, text="Use Simulated ADC (fallback)", 
-                                             variable=self.use_fallback_voltage)
-        self.voltage_checkbox.pack()
-        
-        # Initialize webcam capture (for testing)
-        self.cap = None
-        try:
-            self.cap = cv2.VideoCapture(0)
-            if self.cap.isOpened():
-                # Set webcam to lower resolution for better performance
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                self.cap.set(cv2.CAP_PROP_FPS, 30)
-                print("Webcam available for testing")
-            else:
-                self.cap = None
-        except:
-            print("Could not initialize webcam")
-            self.cap = None
-
         # --- Voltage Graph Setup ---
-        self.fig, self.ax = plt.subplots(figsize=(5, 3))
+        self.fig, self.ax = plt.subplots(figsize=(6, 3))
+        self.fig.patch.set_facecolor('#2C3E50')
+        self.ax.set_facecolor('#34495E')
         self.ax.set_ylim(0, 3.5)  # Adjusted for 3.3V range
-        self.ax.set_title("ADC Voltage vs Time")
-        self.ax.set_xlabel("Time")
-        self.ax.set_ylabel("Voltage (V)")
+        self.ax.set_title("ADC Voltage vs Time", color='white')
+        self.ax.set_xlabel("Time", color='white')
+        self.ax.set_ylabel("Voltage (V)", color='white')
+        self.ax.tick_params(colors='white')
         self.x_data = []
         self.y_data = []
         self.line, = self.ax.plot([], [], 'r-', linewidth=2)
-        self.canvas = FigureCanvasTkAgg(self.fig, master=root)
-        self.canvas.get_tk_widget().pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.graph_frame)
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         
         # Voltage update counter
         self.voltage_update_counter = 0
@@ -413,7 +384,7 @@ class UDPVideoApp:
     def update(self):
         frame = None
         
-        # Try to get frame from UDP first
+        # Get frame from UDP
         try:
             data, addr = self.video_sock.recvfrom(65536)
             npdata = np.frombuffer(data, dtype=np.uint8)
@@ -425,21 +396,14 @@ class UDPVideoApp:
         except socket.error:
             pass
         
-        # Fallback to webcam if enabled and no UDP
-        if frame is None and self.use_webcam.get() and self.cap is not None:
-            ret, frame = self.cap.read()
-            if ret:
-                self.status_label.config(text="Using webcam")
-                self.frame_count += 1
-        
         # Process frame if available
         if frame is not None:
             try:
                 # Skip inference if requested (display only mode)
                 if self.skip_inference.get():
                     processed_frame = frame
-                elif self.use_threading.get():
-                    # Threaded inference
+                else:
+                    # Always use threaded inference
                     self.inference_worker.add_frame(frame)
                     
                     # Check for completed inference
@@ -452,9 +416,6 @@ class UDPVideoApp:
                         processed_frame, _ = self.last_inference_result
                     else:
                         processed_frame = frame
-                else:
-                    # Direct inference (slower)
-                    processed_frame, _ = model_predict_ultra_fast(frame)
                 
                 # Resize for display if too large
                 display_frame = self.resize_for_display(processed_frame)
@@ -544,8 +505,6 @@ class UDPVideoApp:
             self.inference_worker.stop()
         if hasattr(self, 'adc_receiver'):
             self.adc_receiver.stop()
-        if hasattr(self, 'cap') and self.cap is not None:
-            self.cap.release()
         if hasattr(self, 'video_sock'):
             self.video_sock.close()
 
@@ -565,7 +524,5 @@ if __name__ == "__main__":
             app.inference_worker.stop()
         if hasattr(app, 'adc_receiver'):
             app.adc_receiver.stop()
-        if hasattr(app, 'cap') and app.cap is not None:
-            app.cap.release()
         if hasattr(app, 'video_sock'):
             app.video_sock.close()
