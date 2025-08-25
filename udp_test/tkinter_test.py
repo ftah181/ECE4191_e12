@@ -5,15 +5,11 @@ import numpy as np
 import socket
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import random
-import os
 import threading
 import queue
 import time
 import json
 from inference import get_model
-from inference_sdk import InferenceHTTPClient
-from roboflow import Roboflow
 
 # Load model
 model = get_model("animal-detection-evlon/3", api_key="lnHqcMh4NynT1If5FC38")
@@ -25,45 +21,29 @@ last_predictions = []  # Cache last predictions
 frame_buffer = None  # Buffer for frame reuse
 
 # -------------------------
-# Simulated Model Prediction
-# -------------------------
-def model_predict_sim(frame):
-    """
-    Simulate a model that outputs bounding boxes on the frame.
-    """
-    height, width, _ = frame.shape
-    # Example: Draw a random bounding box
-    x1, y1 = np.random.randint(0, width//2), np.random.randint(0, height//2)
-    x2, y2 = x1 + np.random.randint(50, 150), y1 + np.random.randint(50, 150)
-    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-    cv2.putText(frame, "Class A", (x1, y1-10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-    return frame, [{"class": "Class A", "confidence": 0.85, "x": (x1+x2)//2, "y": (y1+y2)//2, "width": x2-x1, "height": y2-y1}]
-
-# -------------------------
 #  Run Inference Model
 # -------------------------
-def model_predict_ultra_fast(frame, force_inference=False):
+def model_predict(frame, force_inference=False):
 
     global frame_skip_counter, last_predictions
-    
+
     # Skip inference on some frames
     frame_skip_counter += 1
     if not force_inference and frame_skip_counter < INFERENCE_SKIP_FRAMES:
         # Use cached predictions
-        return draw_predictions_fast(frame, last_predictions)
-    
+        return draw_predictions(frame, last_predictions)
+
     frame_skip_counter = 0
-    
+
     predictions = []
-    
+
     try:
         # Convert frame to RGB
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
+
         # Run inference
         results = model.infer(frame_rgb)
-        
+
         # Process results - Handle list of ObjectDetectionInferenceResponse objects
         predictions = []
         for response in results:
@@ -77,7 +57,7 @@ def model_predict_ultra_fast(frame, force_inference=False):
                 height = prediction.height
                 confidence = prediction.confidence
                 class_name = prediction.class_name
-                
+
                 prediction_dict = {
                     "class": class_name,
                     "confidence": confidence,
@@ -87,20 +67,20 @@ def model_predict_ultra_fast(frame, force_inference=False):
                     "height": int(height)
                 }
                 predictions.append(prediction_dict)
-        
+
         last_predictions = predictions
-        
+
     except Exception as inference_error:
         print(f"Inference error: {inference_error}")
         # Silent fallback to cached predictions
         predictions = last_predictions
-    
-    return draw_predictions_fast(frame, predictions)
+
+    return draw_predictions(frame, predictions)
 
 # -------------------------
 #  Overlay Bounding Boxes
 # -------------------------
-def draw_predictions_fast(frame, predictions):
+def draw_predictions(frame, predictions):
     """
     Optimized drawing with minimal operations
     """
@@ -131,9 +111,9 @@ def draw_predictions_fast(frame, predictions):
     return frame, predictions
 
 # -------------------------
-# Ultra-Fast Threaded Inference Worker
+# Threaded Inference Worker
 # -------------------------
-class UltraFastInferenceWorker(threading.Thread):
+class InferenceWorker(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True)
         self.frame_queue = queue.Queue(maxsize=1)  # Single frame queue
@@ -165,7 +145,7 @@ class UltraFastInferenceWorker(threading.Thread):
                 frame = self.frame_queue.get(timeout=0.5)
                 
                 # Process with ultra-fast method
-                processed_frame, predictions = model_predict_ultra_fast(frame, force_inference=True)
+                processed_frame, predictions = model_predict(frame, force_inference=True)
                 
                 # Keep only latest result
                 try:
@@ -261,7 +241,7 @@ class ADCReceiver(threading.Thread):
 # -------------------------
 # Optimized Tkinter GUI
 # -------------------------
-class UDPVideoApp:
+class GUI:
     def __init__(self, root, udp_ip="0.0.0.0", video_port=5005, adc_port=5006):
         self.root = root
         self.root.title("UDP Video + ADC Display")
@@ -292,7 +272,7 @@ class UDPVideoApp:
         self.display_fps = 0
         
         # Threading for inference (always enabled)
-        self.inference_worker = UltraFastInferenceWorker()
+        self.inference_worker = InferenceWorker()
         self.inference_worker.start()
         self.last_inference_result = None
         
@@ -300,18 +280,45 @@ class UDPVideoApp:
         self.left_frame = tk.Frame(root, bg='#2C3E50')
         self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=10, pady=10)
         
-        self.right_frame = tk.Frame(root, bg='#34495E', width=400)
+        self.right_frame = tk.Frame(root, bg='#34495E', width=300)
         self.right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.right_frame.pack_propagate(False)  # Maintain fixed width
         
-        # Placeholder label for future content
-        self.right_placeholder = tk.Label(self.right_frame, text="Reserved Space\nfor Future Features", 
-                                         font=("Arial", 12), bg='#34495E', fg='white')
-        self.right_placeholder.pack(expand=True)
+        # Animal detection list
+        self.detection_title = tk.Label(self.right_frame, text="Detected Animals", 
+                                       font=("Arial", 14, "bold"), bg='#34495E', fg='white')
+        self.detection_title.pack(pady=(10, 5))
+        
+        # Scrollable frame for animal list
+        self.detection_canvas = tk.Canvas(self.right_frame, bg='#34495E', highlightthickness=0)
+        self.detection_scrollbar = tk.Scrollbar(self.right_frame, orient="vertical", command=self.detection_canvas.yview)
+        self.detection_scrollable_frame = tk.Frame(self.detection_canvas, bg='#34495E')
+        
+        self.detection_scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.detection_canvas.configure(scrollregion=self.detection_canvas.bbox("all"))
+        )
+        
+        self.detection_canvas.create_window((0, 0), window=self.detection_scrollable_frame, anchor="nw")
+        self.detection_canvas.configure(yscrollcommand=self.detection_scrollbar.set)
+        
+        self.detection_canvas.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=5)
+        self.detection_scrollbar.pack(side="right", fill="y", pady=5)
+        
+        # Clear button
+        self.clear_button = tk.Button(self.right_frame, text="Clear List", 
+                                     command=self.clear_detection_list,
+                                     bg='#E74C3C', fg='white', font=("Arial", 10))
+        self.clear_button.pack(pady=5)
+        
+        # Detection tracking
+        self.detection_list = []
+        self.detection_counter = 0
+        self.detected_animals = set()  # Track unique animals
         
         # Top left: Video frame
         self.video_frame = tk.Frame(self.left_frame, bg='#2C3E50')
-        self.video_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 10))
+        self.video_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=False, pady=(0, 10))
         
         # Performance controls
         self.controls_frame = tk.Frame(self.video_frame)
@@ -410,6 +417,9 @@ class UDPVideoApp:
                     result = self.inference_worker.get_result()
                     if result is not None:
                         self.last_inference_result = result
+                        # Update detection list with new predictions
+                        _, predictions = result
+                        self.update_detection_list(predictions)
                     
                     # Use last result or original frame
                     if self.last_inference_result is not None:
@@ -499,6 +509,53 @@ class UDPVideoApp:
             return cv2.resize(frame, (new_width, new_height))
         
         return frame
+    
+    def update_detection_list(self, predictions):
+        """Update the animal detection list with new predictions - only unique animals"""
+        import datetime
+        
+        current_time = datetime.datetime.now().strftime("%H:%M:%S")
+        
+        for pred in predictions:
+            if pred["confidence"] > 0.5:  # Only add high-confidence detections
+                animal_name = pred["class"].lower()  # Convert to lowercase for comparison
+                
+                # Only add if this animal hasn't been detected before
+                if animal_name not in self.detected_animals:
+                    self.detected_animals.add(animal_name)
+                    self.detection_counter += 1
+                    confidence = pred["confidence"]
+                    
+                    # Create detection entry
+                    detection_frame = tk.Frame(self.detection_scrollable_frame, bg='#2C3E50', 
+                                             relief=tk.RAISED, bd=1)
+                    detection_frame.pack(fill=tk.X, padx=5, pady=2)
+                    
+                    # Detection info
+                    info_text = f"#{self.detection_counter}: {pred['class']}\nConfidence: {confidence:.2f}\nTime: {current_time}"
+                    detection_label = tk.Label(detection_frame, text=info_text, 
+                                             bg='#2C3E50', fg='white', font=("Arial", 9),
+                                             justify=tk.LEFT)
+                    detection_label.pack(padx=5, pady=3)
+                    
+                    # Store detection info
+                    self.detection_list.append({
+                        'frame': detection_frame,
+                        'animal': pred['class'],
+                        'confidence': confidence,
+                        'time': current_time
+                    })
+                    
+                    # Auto-scroll to bottom
+                    self.detection_canvas.update_idletasks()
+                    self.detection_canvas.yview_moveto(1.0)
+    
+    def clear_detection_list(self):
+        """Clear all detections from the list"""
+        for detection in self.detection_list:
+            detection['frame'].destroy()
+        self.detection_list.clear()
+        self.detection_counter = 0
 
     def __del__(self):
         if hasattr(self, 'inference_worker'):
@@ -513,7 +570,7 @@ class UDPVideoApp:
 # -------------------------
 if __name__ == "__main__":
     root = tk.Tk()
-    app = UDPVideoApp(root, video_port=5005, adc_port=5006)
+    app = GUI(root, video_port=5005, adc_port=5006)
     
     try:
         root.mainloop()
