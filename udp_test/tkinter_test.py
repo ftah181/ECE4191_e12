@@ -12,13 +12,15 @@ import json
 from inference import get_model
 
 # Load model
-model = get_model("animal-detection-evlon/3", api_key="lnHqcMh4NynT1If5FC38")
+model = get_model("animal-detection-evlon/2", api_key="lnHqcMh4NynT1If5FC38")
 
 # Global variables for performance optimization
 frame_skip_counter = 0
 INFERENCE_SKIP_FRAMES = 20  # Run inference every N frames (increased from 3)
 last_predictions = []  # Cache last predictions
 frame_buffer = None  # Buffer for frame reuse
+
+CONF_THRESHOLD = 0.7 # Confidence threshold for predictions
 
 # -------------------------
 #  Run Inference Model
@@ -97,11 +99,12 @@ def draw_predictions(frame, predictions):
             x1, y1 = int(x - w // 2), int(y - h // 2)
             x2, y2 = int(x + w // 2), int(y + h // 2)
 
-            # Draw bounding box over frame
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
-            
-            # Only draw label if confidence is high enough (skip low confidence)
-            if pred["confidence"] > 0.3:
+            # Only draw label if confidence is high enough
+            if pred["confidence"] > CONF_THRESHOLD:
+                
+                # Draw bounding box over frame
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+                
                 label = f"{pred['class'][:8]} {pred['confidence']:.1f}"  # Shorter labels
                 cv2.putText(frame, label, (x1, y1 - 5), font, font_scale, color, thickness)
     
@@ -144,7 +147,7 @@ class InferenceWorker(threading.Thread):
             try:
                 frame = self.frame_queue.get(timeout=0.5)
                 
-                # Process with ultra-fast method
+                # Run inference
                 processed_frame, predictions = model_predict(frame, force_inference=True)
                 
                 # Keep only latest result
@@ -161,7 +164,7 @@ class InferenceWorker(threading.Thread):
             except queue.Empty:
                 continue
             except Exception:
-                continue  # Silent error handling
+                continue
     
     def stop(self):
         self.running = False
@@ -239,7 +242,7 @@ class ADCReceiver(threading.Thread):
 
 
 # -------------------------
-# Optimized Tkinter GUI
+# Tkinter GUI
 # -------------------------
 class GUI:
     def __init__(self, root, udp_ip="0.0.0.0", video_port=5005, adc_port=5006):
@@ -250,7 +253,6 @@ class GUI:
 
         # Performance settings
         self.skip_inference = tk.BooleanVar(value=False)
-        self.ultra_mode = tk.BooleanVar(value=True)  # New ultra-fast mode
         
         # Setup Video UDP Socket with larger buffer
         self.video_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -326,8 +328,6 @@ class GUI:
         
         tk.Checkbutton(self.controls_frame, text="Skip Inference", 
                       variable=self.skip_inference).pack(side=tk.LEFT)
-        tk.Checkbutton(self.controls_frame, text="Ultra Mode", 
-                      variable=self.ultra_mode).pack(side=tk.LEFT)
         
         # Status labels
         self.status_label = tk.Label(self.video_frame, text="Waiting for UDP frames...", 
@@ -417,6 +417,7 @@ class GUI:
                     result = self.inference_worker.get_result()
                     if result is not None:
                         self.last_inference_result = result
+                        
                         # Update detection list with new predictions
                         _, predictions = result
                         self.update_detection_list(predictions)

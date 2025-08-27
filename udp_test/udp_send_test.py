@@ -8,7 +8,7 @@ import random
 # -------------------------
 # UDP Target Settings
 # -------------------------
-UDP_IP = "118.138.97.218"  # Change to your laptop's IP if on a network
+UDP_IP = "118.138.69.185"  # Change to your laptop's IP if on a network
 UDP_PORT_VIDEO = 5005     # Port for video frames
 UDP_PORT_ADC = 5006       # Port for ADC data
 
