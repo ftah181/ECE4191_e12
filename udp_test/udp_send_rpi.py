@@ -9,7 +9,7 @@ from picamera2 import Picamera2
 # -------------------------
 # UDP Target Settings
 # -------------------------
-UDP_IP = "172.20.10.2"  # Change to your laptop's IP if on a network
+UDP_IP = "192.168.99.175"  # Change to your laptop's IP if on a network
 UDP_PORT_VIDEO = 5005     # Port for video frames
 UDP_PORT_ADC = 5006       # Port for ADC data
 
@@ -40,18 +40,19 @@ picam2 = Picamera2()
 
 config = picam2.create_video_configuration(
     main={
-    "size": (320, 240),
+    "size": (640, 480),
     })
 
 picam2.configure(config)
 
-controls = {
-    "AwbMode": 4,
-    "AeEnable": True,                  # enable auto exposure
-    "ColourGains": (1.2, 1.1),  # boost red slightly, blue slightly
-    "AnalogueGain": 1.0                # default gain
-}
-picam2.set_controls(controls)
+# controls = {
+#     "AwbMode": 4,
+#     "AeEnable": True,                  # enable auto exposure
+#     #"ColourGains": (1.2, 1.1),  # boost red slightly, blue slightly
+#     "AnalogueGain": 1.0                # default gain
+# }
+#picam2.set_controls(controls)
+
 picam2.start()
 
 # Timing variables

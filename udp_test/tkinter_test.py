@@ -473,8 +473,8 @@ class GUI:
                             print("Failed to initialize VideoWriter")
                             self.video_out = None
                 
-                # Record frames
-                self.video_out.write(display_frame)
+                    # Record frames
+                    self.video_out.write(display_frame)
 
                 # Update counters
                 self.frame_counter_label.config(text=f"Frames: {self.frame_count}")
