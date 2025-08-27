@@ -375,7 +375,31 @@ class GUI:
         self.voltage_update_counter = 0
         self.plot_time_offset = time.time()
 
+        # Setup VideoWriter
+        self.video_out = None
+        self.recording = False
+        self.video_filename = "output.mp4"
+
+        # Recording button
+        self.record_button = tk.Button(root, text="Start Recording", command=self.toggle_recording)
+        self.record_button.pack(pady=10)
+
         self.update()  # start loop
+
+    def toggle_recording(self):
+        if not self.recording:
+            # Start recording
+            self.recording = True
+            self.record_button.config(text="Stop Recording")
+            print("Recording started")
+        else:
+            # Stop recording
+            self.recording = False
+            self.record_button.config(text="Start Recording")
+            if self.video_out is not None:
+                self.video_out.release()
+                self.video_out = None
+            print("Recording stopped")
     
     def calculate_fps(self):
         """Calculate and update FPS display"""
@@ -417,7 +441,7 @@ class GUI:
                     result = self.inference_worker.get_result()
                     if result is not None:
                         self.last_inference_result = result
-                        
+
                         # Update detection list with new predictions
                         _, predictions = result
                         self.update_detection_list(predictions)
@@ -437,7 +461,21 @@ class GUI:
                 imgtk = ImageTk.PhotoImage(image=img)
                 self.video_label.imgtk = imgtk
                 self.video_label.configure(image=imgtk)
+
+                if self.recording:
+                    if self.video_out is None:
+                        # Define the codec and create VideoWriter object
+                        h, w = frame.shape[:2]
+                        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # MP4 codec
+                        self.video_out = cv2.VideoWriter(self.video_filename, fourcc, 20.0, (w, h))
+                    
+                        if not self.video_out.isOpened():
+                            print("Failed to initialize VideoWriter")
+                            self.video_out = None
                 
+                # Record frames
+                self.video_out.write(display_frame)
+
                 # Update counters
                 self.frame_counter_label.config(text=f"Frames: {self.frame_count}")
                 self.calculate_fps()
@@ -565,6 +603,8 @@ class GUI:
             self.adc_receiver.stop()
         if hasattr(self, 'video_sock'):
             self.video_sock.close()
+        if self.video_out is not None:
+            self.video_out.release()
 
 # -------------------------
 # Run
