@@ -5,11 +5,13 @@ import json
 import time
 import random
 from picamera2 import Picamera2
-
+import spidev
+import RPi.GPIO as GPIO
+import time
 # -------------------------
 # UDP Target Settings
 # -------------------------
-UDP_IP = "192.168.99.175"  # Change to your laptop's IP if on a network
+UDP_IP = "172.20.10.2"  # Change to your laptop's IP if on a network
 UDP_PORT_VIDEO = 5005     # Port for video frames
 UDP_PORT_ADC = 5006       # Port for ADC data
 
@@ -19,17 +21,25 @@ sock_adc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 # -------------------------
 # ADC Simulation Settings
 # -------------------------
-def simulate_adc_reading():
-    """Simulate ADC reading from a single channel"""
-    # Simulate voltage reading with some variation (0-3.3V range)
-    voltage = round(1.65 + 0.8 * np.sin(time.time() * 0.5) + random.uniform(-0.1, 0.1), 3)
-    voltage = max(0.0, min(3.3, voltage))  # Clamp between 0 and 3.3V
+# Setup
+CS_PIN = 21  # GPIO21 as CS
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(CS_PIN, GPIO.OUT)
+GPIO.output(CS_PIN, GPIO.HIGH)  # CS idle high
+spi = spidev.SpiDev()
+spi.open(0, 0)  # SPI bus 0, device 0
+spi.max_speed_hz = 1350000  # 1.35 MHz
+def read_mcp3008(channel):
+    if channel < 0 or channel > 7:
+        return -1
+    cmd = [1, (8 + channel) << 4, 0]
     
-    reading = {
-        'timestamp': time.time(),
-        'voltage': voltage
-    }
-    return reading
+    GPIO.output(CS_PIN, GPIO.LOW)     # Select MCP3008
+    result = spi.xfer2(cmd)
+    GPIO.output(CS_PIN, GPIO.HIGH)    # Deselect MCP3008
+
+    value = ((result[1] & 3) << 8) + result[2]  # 10-bit value
+    return value
 
 # -------------------------
 # Webcam Capture
@@ -74,14 +84,14 @@ try:
 
         # --- Send ADC data at specified interval ---
         current_time = time.time()
-        if current_time - last_adc_time >= ADC_INTERVAL:
-            adc_data = simulate_adc_reading()
+        if current_time - last_adc_time >= adc_interval:
+            adc_data = {"voltage": read_mcp3008(0)}
             adc_json = json.dumps(adc_data).encode('utf-8')
             sock_adc.sendto(adc_json, (UDP_IP, UDP_PORT_ADC))
             last_adc_time = current_time
             
             # Optional: print ADC values for debugging
-            #print(f"ADC: {adc_data['voltage']}V")
+            print(f"ADC: {adc_data}V")
 
         # Optional: show local preview
         # cv2.imshow('Local Webcam', frame)
