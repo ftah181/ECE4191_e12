@@ -12,7 +12,7 @@ import json
 from inference import get_model
 
 # Load model
-model = get_model("animal-detection-evlon/2", api_key="lnHqcMh4NynT1If5FC38")
+model = get_model("animal-detection-evlon/3", api_key="lnHqcMh4NynT1If5FC38")
 
 # Global variables for performance optimization
 frame_skip_counter = 0
@@ -211,6 +211,7 @@ class ADCReceiver(threading.Thread):
                 
                 # Update latest voltage
                 self.latest_voltage = adc_data.get('voltage', 0.0)
+                print(self.latest_voltage)
                 
                 # Add to queue for plotting
                 try:
@@ -360,7 +361,7 @@ class GUI:
         self.fig, self.ax = plt.subplots(figsize=(6, 3))
         self.fig.patch.set_facecolor('#2C3E50')
         self.ax.set_facecolor('#34495E')
-        self.ax.set_ylim(0, 3.5)  # Adjusted for 3.3V range
+        self.ax.set_ylim(0, 500)
         self.ax.set_title("ADC Voltage vs Time", color='white')
         self.ax.set_xlabel("Time", color='white')
         self.ax.set_ylabel("Voltage (V)", color='white')

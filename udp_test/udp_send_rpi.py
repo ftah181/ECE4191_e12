@@ -57,7 +57,8 @@ picam2.start()
 
 # Timing variables
 last_adc_time = 0
-adc_interval = 0.1  # Send ADC data every 100ms (10Hz)
+
+ADC_INTERVAL = 0.1  # Send ADC data every 100ms (10Hz)
 
 print(f"Sending video to {UDP_IP}:{UDP_PORT_VIDEO}")
 print(f"Sending ADC data to {UDP_IP}:{UDP_PORT_ADC}")
@@ -73,14 +74,14 @@ try:
 
         # --- Send ADC data at specified interval ---
         current_time = time.time()
-        if current_time - last_adc_time >= adc_interval:
+        if current_time - last_adc_time >= ADC_INTERVAL:
             adc_data = simulate_adc_reading()
             adc_json = json.dumps(adc_data).encode('utf-8')
             sock_adc.sendto(adc_json, (UDP_IP, UDP_PORT_ADC))
             last_adc_time = current_time
             
             # Optional: print ADC values for debugging
-            # print(f"ADC: {adc_data['voltage']}V")
+            #print(f"ADC: {adc_data['voltage']}V")
 
         # Optional: show local preview
         # cv2.imshow('Local Webcam', frame)
