@@ -11,7 +11,7 @@ import time
 # -------------------------
 # UDP Target Settings
 # -------------------------
-UDP_IP = "192.168.99.175"  # Change to your laptop's IP if on a network
+UDP_IP = "172.20.10.2"  # Change to your laptop's IP if on a network
 UDP_PORT_VIDEO = 5005     # Port for video frames
 UDP_PORT_ADC = 5006       # Port for ADC data
 
@@ -84,13 +84,13 @@ try:
         # --- Send ADC data at specified interval ---
         current_time = time.time()
         if current_time - last_adc_time >= adc_interval:
-            adc_data = read_mcp3008(0)
+            adc_data = {"voltage": read_mcp3008(0)}
             adc_json = json.dumps(adc_data).encode('utf-8')
             sock_adc.sendto(adc_json, (UDP_IP, UDP_PORT_ADC))
             last_adc_time = current_time
             
             # Optional: print ADC values for debugging
-            # print(f"ADC: {adc_data['voltage']}V")
+            print(f"ADC: {adc_data}V")
 
         # Optional: show local preview
         # cv2.imshow('Local Webcam', frame)
