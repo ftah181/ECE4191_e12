@@ -1,0 +1,6 @@
+path: C:/Users/Josh Wright/Monash/ECE4191/dataset
+train: images/train
+val: images/val
+test: images/test
+nc: 8
+names: ['cockatoo', 'crocodile', 'frog', 'kangaroo', 'koala', 'platypus', 'tassie devil', 'wombat']
