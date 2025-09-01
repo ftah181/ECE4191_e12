@@ -10,9 +10,11 @@ import queue
 import time
 import json
 from inference import get_model
+from ultralytics import YOLO
 
 # Load model
-model = get_model("animal-detection-evlon/3", api_key="lnHqcMh4NynT1If5FC38")
+#model = get_model("animal-detection-evlon/3", api_key="lnHqcMh4NynT1If5FC38")
+model = YOLO("models/runs/train/my_model/weights/best.pt")
 
 # Global variables for performance optimization
 frame_skip_counter = 0
@@ -26,7 +28,6 @@ CONF_THRESHOLD = 0.7 # Confidence threshold for predictions
 #  Run Inference Model
 # -------------------------
 def model_predict(frame, force_inference=False):
-
     global frame_skip_counter, last_predictions
 
     # Skip inference on some frames
@@ -40,35 +41,36 @@ def model_predict(frame, force_inference=False):
     predictions = []
 
     try:
-        # Convert frame to RGB
+        # Convert frame (YOLO expects RGB)
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Run inference
-        results = model.infer(frame_rgb)
+        # Run inference (Ultralytics API)
+        results = model(frame_rgb)   # returns list[Results]
+        res = results[0]             # single frame → single Results object
 
-        # Process results - Handle list of ObjectDetectionInferenceResponse objects
         predictions = []
-        for response in results:
-            # Process each prediction in this response
+        for box in res.boxes:
+            # xyxy format: [x1, y1, x2, y2]
+            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
 
-            for prediction in response.predictions:
-                # Get coordinates and info from the prediction object
-                x = prediction.x
-                y = prediction.y
-                width = prediction.width
-                height = prediction.height
-                confidence = prediction.confidence
-                class_name = prediction.class_name
+            # Convert to center-x, center-y, width, height (to match your format)
+            w, h = x2 - x1, y2 - y1
+            x, y = x1 + w // 2, y1 + h // 2
 
-                prediction_dict = {
-                    "class": class_name,
-                    "confidence": confidence,
-                    "x": int(x),
-                    "y": int(y),
-                    "width": int(width),
-                    "height": int(height)
-                }
-                predictions.append(prediction_dict)
+            # Confidence and class
+            confidence = float(box.conf[0].item())
+            cls = int(box.cls[0].item())
+            class_name = res.names[cls]
+
+            prediction_dict = {
+                "class": class_name,
+                "confidence": confidence,
+                "x": x,
+                "y": y,
+                "width": w,
+                "height": h
+            }
+            predictions.append(prediction_dict)
 
         last_predictions = predictions
 
