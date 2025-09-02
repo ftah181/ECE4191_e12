@@ -410,20 +410,36 @@ class GUI:
     
     def update(self):
         frame = None
+        frames_processed = 0
+        max_frames_per_cycle = 5  # Process multiple frames per update to clear buffer
         
-        # Get frame from UDP
-        try:
-            data, addr = self.video_sock.recvfrom(1048576)
-            npdata = np.frombuffer(data, dtype=np.uint8)
-            frame = cv2.imdecode(npdata, cv2.IMREAD_COLOR)
-            
-            if frame is not None:
-                self.status_label.config(text=f"Video UDP: {addr[0]}:{addr[1]}")
-                self.frame_count += 1
-        except socket.error:
-            pass
+        # Process multiple frames to prevent buffer buildup
+        while frames_processed < max_frames_per_cycle:
+            try:
+                # Use non-blocking receive
+                data, addr = self.video_sock.recvfrom(1048576)
+                npdata = np.frombuffer(data, dtype=np.uint8)
+                new_frame = cv2.imdecode(npdata, cv2.IMREAD_COLOR)
+                
+                if new_frame is not None:
+                    # Always use the latest frame (drop older ones)
+                    frame = new_frame
+                    frames_processed += 1
+                    self.frame_count += 1
+                    
+                    # Update status only for the latest frame
+                    if frames_processed == 1:  # Only update status once
+                        self.status_label.config(text=f"Video UDP: {addr[0]}:{addr[1]}")
+                
+            except socket.error:
+                # No more frames available
+                break
         
-        # Process frame if available
+        # If we processed multiple frames, show buffer info
+        if frames_processed > 1:
+            print(f"Buffer cleared: processed {frames_processed} frames, displaying latest")
+        
+        # Process the latest frame if available
         if frame is not None:
             try:
                 # Skip inference if requested (display only mode)
@@ -470,7 +486,8 @@ class GUI:
                             self.video_out = None
                 
                     # Record frames
-                    self.video_out.write(display_frame)
+                    if self.video_out is not None:
+                        self.video_out.write(display_frame)
 
                 # Update counters
                 self.frame_counter_label.config(text=f"Frames: {self.frame_count}")
@@ -479,9 +496,9 @@ class GUI:
             except Exception as e:
                 print(f"Frame processing error: {e}")
 
-        # Update voltage plot
+        # Update voltage plot (less frequently to reduce overhead)
         self.voltage_update_counter += 1
-        if self.voltage_update_counter >= 5:  # Update every 5 frames for smoother plotting
+        if self.voltage_update_counter >= 10:  # Reduced frequency for better performance
             self.voltage_update_counter = 0
             try:
                 # Get voltage data from ADC receiver
@@ -522,8 +539,8 @@ class GUI:
             except Exception as e:
                 print(f"Plot update error: {e}")
 
-        # Faster update cycle
-        self.root.after(16, self.update)  # ~60 FPS target
+        # Faster update cycle - consider making this adaptive
+        self.root.after(10, self.update)  # Increased frequency to clear buffer faster
     
     def resize_for_display(self, frame):
         """Resize frame for display with reasonable size limits"""
