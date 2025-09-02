@@ -51,11 +51,10 @@ def model_predict(frame, force_inference=False):
         res = results[0]
         predictions = []
         h, w, _ = frame.shape
-        print(f"Frame size: {w}x{h}")
 
         for box in res.boxes:
             x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
-            print(f"YOLO box: {x1},{y1},{x2},{y2}")
+            #print(f"YOLO box: {x1},{y1},{x2},{y2}")
 
             confidence = float(box.conf[0].item())
             cls = int(box.cls[0].item())
@@ -206,7 +205,7 @@ class ADCReceiver(threading.Thread):
                 
                 # Update latest voltage
                 self.latest_voltage = adc_data.get('voltage', 0.0)
-                print(self.latest_voltage)
+                #print(self.latest_voltage)
                 
                 # Add to queue for plotting
                 try:
@@ -436,8 +435,8 @@ class GUI:
                 break
         
         # If we processed multiple frames, show buffer info
-        if frames_processed > 1:
-            print(f"Buffer cleared: processed {frames_processed} frames, displaying latest")
+        #if frames_processed > 1:
+        #    print(f"Buffer cleared: processed {frames_processed} frames, displaying latest")
         
         # Process the latest frame if available
         if frame is not None:
