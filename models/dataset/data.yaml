@@ -1,4 +1,3 @@
-path: C:/Users/Josh Wright/Monash/ECE4191/dataset
 train: images/train
 val: images/val
 test: images/test

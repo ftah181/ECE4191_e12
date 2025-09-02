@@ -1,7 +1,7 @@
 task: detect
 mode: train
 model: yolov8n.pt
-data: C:\Users\Josh Wright\Monash\ECE4191\dataset\data.yaml
+data: C:\Users\Josh Wright\Monash\ECE4191\models\dataset\data.yaml
 epochs: 250
 time: null
 patience: 100
@@ -11,8 +11,8 @@ save: true
 save_period: -1
 cache: false
 device: null
-workers: 0
-project: runs/train
+workers: 4
+project: C:\Users\Josh Wright\Monash\ECE4191\models\runs\train
 name: my_model
 exist_ok: true
 pretrained: true
@@ -102,4 +102,4 @@ auto_augment: randaugment
 erasing: 0.4
 cfg: null
 tracker: botsort.yaml
-save_dir: runs\train\my_model
+save_dir: C:\Users\Josh Wright\Monash\ECE4191\models\runs\train\my_model
