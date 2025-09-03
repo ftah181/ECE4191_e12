@@ -22,7 +22,7 @@ sock_adc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 # ADC Simulation Settings
 # -------------------------
 # Setup
-CS_PIN = 21  # GPIO21 as CS
+CS_PIN = 8  # GPIO21 as CS
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(CS_PIN, GPIO.OUT)
 GPIO.output(CS_PIN, GPIO.HIGH)  # CS idle high
@@ -82,12 +82,14 @@ try:
             sock_video.sendto(buffer.tobytes(), (UDP_IP, UDP_PORT_VIDEO))
 
         # --- Send ADC data at specified interval ---
-        current_time = time.time()
-        if current_time - last_adc_time >= adc_interval:
-            adc_data = read_mcp3008(0)
-            adc_json = json.dumps(adc_data).encode('utf-8')
-            sock_adc.sendto(adc_json, (UDP_IP, UDP_PORT_ADC))
-            last_adc_time = current_time
+        start_time = time.time()
+        adc_data = read_mcp3008(0)
+        adc_json = json.dumps(adc_data).encode('utf-8')
+        sock_adc.sendto(adc_json, (UDP_IP, UDP_PORT_ADC))
+        end_time = time.perf_counter()
+        elapsed = end_time - start_time
+        actual_rate = 1 / elapsed
+        print(f"Achieved sampling rate: {actual_rate:.1f} Hz over {elapsed:.2f} seconds")
             
             # Optional: print ADC values for debugging
             # print(f"ADC: {adc_data['voltage']}V")
