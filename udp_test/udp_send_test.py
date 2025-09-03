@@ -8,7 +8,7 @@ import random
 # -------------------------
 # UDP Target Settings
 # -------------------------
-UDP_IP = "118.138.69.185"  # Change to your laptop's IP if on a network
+UDP_IP = "118.138.90.109"  # Change to your laptop's IP if on a network
 UDP_PORT_VIDEO = 5005     # Port for video frames
 UDP_PORT_ADC = 5006       # Port for ADC data
 
@@ -36,8 +36,8 @@ def simulate_adc_reading():
 cap = cv2.VideoCapture(0)  # 0 = default webcam
 
 # Set lower resolution for Raspberry Pi
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
 # Timing variables
 last_adc_time = 0

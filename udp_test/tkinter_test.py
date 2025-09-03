@@ -10,9 +10,12 @@ import queue
 import time
 import json
 from inference import get_model
+from ultralytics import YOLO
 
 # Load model
-model = get_model("animal-detection-evlon/2", api_key="lnHqcMh4NynT1If5FC38")
+#model = get_model("animal-detection-evlon/3", api_key="lnHqcMh4NynT1If5FC38")
+model = YOLO("models/runs/train/my_model/weights/best.pt")
+# model = YOLO("models/yolo11n.pt")
 
 # Global variables for performance optimization
 frame_skip_counter = 0
@@ -26,92 +29,83 @@ CONF_THRESHOLD = 0.7 # Confidence threshold for predictions
 #  Run Inference Model
 # -------------------------
 def model_predict(frame, force_inference=False):
-
     global frame_skip_counter, last_predictions
 
-    # Skip inference on some frames
     frame_skip_counter += 1
     if not force_inference and frame_skip_counter < INFERENCE_SKIP_FRAMES:
-        # Use cached predictions
         return draw_predictions(frame, last_predictions)
 
     frame_skip_counter = 0
-
     predictions = []
 
     try:
-        # Convert frame to RGB
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = model(frame_rgb, 
+                        imgsz=640,           # Increase size
+                        conf=0.25,           # Confidence threshold
+                        iou=0.45,            # NMS IoU threshold
+                        max_det=300,         # Max detections
+                        augment=False,       # Test time augmentation
+                        agnostic_nms=False)  # Class-agnostic NMS
 
-        # Run inference
-        results = model.infer(frame_rgb)
-
-        # Process results - Handle list of ObjectDetectionInferenceResponse objects
+        res = results[0]
         predictions = []
-        for response in results:
-            # Process each prediction in this response
+        h, w, _ = frame.shape
 
-            for prediction in response.predictions:
-                # Get coordinates and info from the prediction object
-                x = prediction.x
-                y = prediction.y
-                width = prediction.width
-                height = prediction.height
-                confidence = prediction.confidence
-                class_name = prediction.class_name
+        for box in res.boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
+            #print(f"YOLO box: {x1},{y1},{x2},{y2}")
 
-                prediction_dict = {
-                    "class": class_name,
-                    "confidence": confidence,
-                    "x": int(x),
-                    "y": int(y),
-                    "width": int(width),
-                    "height": int(height)
-                }
-                predictions.append(prediction_dict)
+            confidence = float(box.conf[0].item())
+            cls = int(box.cls[0].item())
+            class_name = res.names[cls]
+
+            prediction_dict = {
+                "class": class_name,
+                "confidence": confidence,
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2
+            }
+            predictions.append(prediction_dict)
 
         last_predictions = predictions
 
-    except Exception as inference_error:
-        print(f"Inference error: {inference_error}")
-        # Silent fallback to cached predictions
+    except Exception as e:
+        print(f"Inference error: {e}")
         predictions = last_predictions
 
     return draw_predictions(frame, predictions)
+
 
 # -------------------------
 #  Overlay Bounding Boxes
 # -------------------------
 def draw_predictions(frame, predictions):
-    """
-    Optimized drawing with minimal operations
-    """
     try:
-        # Set bounding box colour and font
         color = (0, 255, 0)
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 1
         thickness = 2
-        
-        for pred in predictions:
-            # Extract bounding box
-            x, y, w, h = pred["x"], pred["y"], pred["width"], pred["height"]
-            x1, y1 = int(x - w // 2), int(y - h // 2)
-            x2, y2 = int(x + w // 2), int(y + h // 2)
 
-            # Only draw label if confidence is high enough
+        for pred in predictions:
             if pred["confidence"] > CONF_THRESHOLD:
-                
-                # Draw bounding box over frame
+                x1, y1, x2, y2 = pred["x1"], pred["y1"], pred["x2"], pred["y2"]
+
+                # Draw rectangle
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
-                
-                label = f"{pred['class'][:8]} {pred['confidence']:.1f}"  # Shorter labels
-                cv2.putText(frame, label, (x1, y1 - 5), font, font_scale, color, thickness)
-    
-    except:
-        pass
-    
+
+                # Label
+                label = f"{pred['class'][:8]} {pred['confidence']:.1f}"
+                cv2.putText(frame, label, (x1, y1 - 5),
+                            font, font_scale, color, thickness)
+
+    except Exception as e:
+        print(f"Draw error: {e}")
+
     return frame, predictions
+
 
 # -------------------------
 # Threaded Inference Worker
@@ -211,6 +205,7 @@ class ADCReceiver(threading.Thread):
                 
                 # Update latest voltage
                 self.latest_voltage = adc_data.get('voltage', 0.0)
+                #print(self.latest_voltage)
                 
                 # Add to queue for plotting
                 try:
@@ -256,7 +251,7 @@ class GUI:
         
         # Setup Video UDP Socket with larger buffer
         self.video_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.video_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536 * 4)
+        self.video_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576 * 4)
         try:
             self.video_sock.bind((udp_ip, video_port))
             self.video_sock.setblocking(False)
@@ -360,7 +355,7 @@ class GUI:
         self.fig, self.ax = plt.subplots(figsize=(6, 3))
         self.fig.patch.set_facecolor('#2C3E50')
         self.ax.set_facecolor('#34495E')
-        self.ax.set_ylim(0, 3.5)  # Adjusted for 3.3V range
+        self.ax.set_ylim(0, 500)
         self.ax.set_title("ADC Voltage vs Time", color='white')
         self.ax.set_xlabel("Time", color='white')
         self.ax.set_ylabel("Voltage (V)", color='white')
@@ -414,20 +409,36 @@ class GUI:
     
     def update(self):
         frame = None
+        frames_processed = 0
+        max_frames_per_cycle = 5  # Process multiple frames per update to clear buffer
         
-        # Get frame from UDP
-        try:
-            data, addr = self.video_sock.recvfrom(65536)
-            npdata = np.frombuffer(data, dtype=np.uint8)
-            frame = cv2.imdecode(npdata, cv2.IMREAD_COLOR)
-            
-            if frame is not None:
-                self.status_label.config(text=f"Video UDP: {addr[0]}:{addr[1]}")
-                self.frame_count += 1
-        except socket.error:
-            pass
+        # Process multiple frames to prevent buffer buildup
+        while frames_processed < max_frames_per_cycle:
+            try:
+                # Use non-blocking receive
+                data, addr = self.video_sock.recvfrom(1048576)
+                npdata = np.frombuffer(data, dtype=np.uint8)
+                new_frame = cv2.imdecode(npdata, cv2.IMREAD_COLOR)
+                
+                if new_frame is not None:
+                    # Always use the latest frame (drop older ones)
+                    frame = new_frame
+                    frames_processed += 1
+                    self.frame_count += 1
+                    
+                    # Update status only for the latest frame
+                    if frames_processed == 1:  # Only update status once
+                        self.status_label.config(text=f"Video UDP: {addr[0]}:{addr[1]}")
+                
+            except socket.error:
+                # No more frames available
+                break
         
-        # Process frame if available
+        # If we processed multiple frames, show buffer info
+        #if frames_processed > 1:
+        #    print(f"Buffer cleared: processed {frames_processed} frames, displaying latest")
+        
+        # Process the latest frame if available
         if frame is not None:
             try:
                 # Skip inference if requested (display only mode)
@@ -474,7 +485,8 @@ class GUI:
                             self.video_out = None
                 
                     # Record frames
-                    self.video_out.write(display_frame)
+                    if self.video_out is not None:
+                        self.video_out.write(display_frame)
 
                 # Update counters
                 self.frame_counter_label.config(text=f"Frames: {self.frame_count}")
@@ -483,9 +495,9 @@ class GUI:
             except Exception as e:
                 print(f"Frame processing error: {e}")
 
-        # Update voltage plot
+        # Update voltage plot (less frequently to reduce overhead)
         self.voltage_update_counter += 1
-        if self.voltage_update_counter >= 5:  # Update every 5 frames for smoother plotting
+        if self.voltage_update_counter >= 10:  # Reduced frequency for better performance
             self.voltage_update_counter = 0
             try:
                 # Get voltage data from ADC receiver
@@ -526,8 +538,8 @@ class GUI:
             except Exception as e:
                 print(f"Plot update error: {e}")
 
-        # Faster update cycle
-        self.root.after(16, self.update)  # ~60 FPS target
+        # Faster update cycle - consider making this adaptive
+        self.root.after(10, self.update)  # Increased frequency to clear buffer faster
     
     def resize_for_display(self, frame):
         """Resize frame for display with reasonable size limits"""

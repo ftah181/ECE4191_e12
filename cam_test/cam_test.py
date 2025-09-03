@@ -3,9 +3,10 @@ import time
 
 picam2 = Picamera2()
 
-config = picam2.create_still_configuration(
+config = picam2.create_video_configuration(
     main={
-    "size": (3280, 2464),
+    "format": "BGR888", 
+    "size": (640, 480)
     })
 
 picam2.configure(config)

@@ -1,0 +1,3 @@
+runs - Contains trained models and respective metrics as well as inference model testing on unseen images
+
+dataset - data used train inference model
