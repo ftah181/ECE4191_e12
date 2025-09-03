@@ -83,26 +83,17 @@ try:
             sock_video.sendto(buffer.tobytes(), (UDP_IP, UDP_PORT_VIDEO))
 
         # --- Send ADC data at specified interval ---
-<<<<<<< HEAD
-        start_time = time.time()
-        adc_data = read_mcp3008(0)
+       	start_time = time.time()
+        adc_data = {"voltage": read_mcp3008(0)}
         adc_json = json.dumps(adc_data).encode('utf-8')
         sock_adc.sendto(adc_json, (UDP_IP, UDP_PORT_ADC))
         end_time = time.perf_counter()
         elapsed = end_time - start_time
         actual_rate = 1 / elapsed
         print(f"Achieved sampling rate: {actual_rate:.1f} Hz over {elapsed:.2f} seconds")
-=======
-        current_time = time.time()
-        if current_time - last_adc_time >= adc_interval:
-            adc_data = {"voltage": read_mcp3008(0)}
-            adc_json = json.dumps(adc_data).encode('utf-8')
-            sock_adc.sendto(adc_json, (UDP_IP, UDP_PORT_ADC))
-            last_adc_time = current_time
->>>>>>> d054d75ff1aa43285eb36de7d860ebb8ad1b6f88
-            
-            # Optional: print ADC values for debugging
-            print(f"ADC: {adc_data}V")
+
+    	# Optional: print ADC values for debugging
+	print(f"ADC: {adc_data}V")
 
         # Optional: show local preview
         # cv2.imshow('Local Webcam', frame)
