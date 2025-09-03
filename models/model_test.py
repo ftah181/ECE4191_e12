@@ -21,7 +21,7 @@ def main():
     results = model.predict(
         source=rpi_folder,          # folder with new images
         imgsz=640,
-        conf=0.25,
+        conf=0.6,
         save=True,                  # save annotated images
         project=project_folder,  # where to save predictions
         name=run_name,       # folder name for this inference run
