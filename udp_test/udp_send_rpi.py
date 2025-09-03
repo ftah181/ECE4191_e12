@@ -22,13 +22,13 @@ sock_adc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 # ADC Simulation Settings
 # -------------------------
 # Setup
-CS_PIN = 8  # GPIO21 as CS
+CS_PIN = 21  # GPIO21 as CS
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(CS_PIN, GPIO.OUT)
 GPIO.output(CS_PIN, GPIO.HIGH)  # CS idle high
 spi = spidev.SpiDev()
 spi.open(0, 0)  # SPI bus 0, device 0
-spi.max_speed_hz = 1350000  # 1.35 MHz
+spi.max_speed_hz = 3600000  # 1.35 MHz
 def read_mcp3008(channel):
     if channel < 0 or channel > 7:
         return -1
@@ -50,7 +50,7 @@ picam2 = Picamera2()
 
 config = picam2.create_video_configuration(
     main={
-    "size": (640, 480),
+    "size": (320, 240),
     })
 
 picam2.configure(config)
@@ -65,10 +65,12 @@ picam2.configure(config)
 
 picam2.start()
 
-# Timing variables
-last_adc_time = 0
-
-ADC_INTERVAL = 0.1  # Send ADC data every 100ms (10Hz)
+# -------------------------
+# Sampling rate measurement over N samples
+# -------------------------
+SAMPLE_WINDOW = 100     # number of samples to average over
+sample_count = 0
+start_time = time.time()
 
 print(f"Sending video to {UDP_IP}:{UDP_PORT_VIDEO}")
 print(f"Sending ADC data to {UDP_IP}:{UDP_PORT_ADC}")
@@ -83,17 +85,20 @@ try:
             sock_video.sendto(buffer.tobytes(), (UDP_IP, UDP_PORT_VIDEO))
 
         # --- Send ADC data at specified interval ---
-       	start_time = time.time()
         adc_data = {"voltage": read_mcp3008(0)}
         adc_json = json.dumps(adc_data).encode('utf-8')
         sock_adc.sendto(adc_json, (UDP_IP, UDP_PORT_ADC))
-        end_time = time.perf_counter()
-        elapsed = end_time - start_time
-        actual_rate = 1 / elapsed
-        print(f"Achieved sampling rate: {actual_rate:.1f} Hz over {elapsed:.2f} seconds")
+        
+        #Calculate samples for rate calculatuion
+        sample_count +=1
+        if sample_count>= SAMPLE_WINDOW:
+            end_time = time.time()
+            elapsed = end_time - start_time
+            actual_rate = sample_count / elapsed
+            print(f"Achieved sampling rate: {actual_rate:.1f} Hz over {elapsed:.2f} seconds")
 
     	# Optional: print ADC values for debugging
-	print(f"ADC: {adc_data}V")
+        print(f"ADC: {adc_data}V")
 
         # Optional: show local preview
         # cv2.imshow('Local Webcam', frame)
