@@ -23,7 +23,7 @@ def main():
     # Train
     model.train(
         data=data_yaml,
-        epochs=250,          # adjust as needed
+        epochs=100,          # adjust as needed
         batch=-1,           # auto-detect largest batch size according to available GPU VRAM
         imgsz=640,
         workers=4,
