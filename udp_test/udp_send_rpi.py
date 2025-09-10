@@ -8,12 +8,17 @@ from picamera2 import Picamera2
 import spidev
 import RPi.GPIO as GPIO
 import time
+import math
+
 # -------------------------
 # UDP Target Settings
 # -------------------------
 UDP_IP = "172.20.10.2"  # Change to your laptop's IP if on a network
 UDP_PORT_VIDEO = 5005     # Port for video frames
 UDP_PORT_ADC = 5006       # Port for ADC data
+
+CHUNK_SIZE = 528
+frame_id = 0
 
 sock_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock_adc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -82,7 +87,21 @@ try:
         # --- Encode and send video frame ---
         ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 30])
         if ret:
-            sock_video.sendto(buffer.tobytes(), (UDP_IP, UDP_PORT_VIDEO))
+            data = buffer.tobytes()
+            total_chunks = math.ceil(len(data) / CHUNK_SIZE)
+
+            for i in range(total_chunks):
+                start = i * CHUNK_SIZE
+                end = start + CHUNK_SIZE
+                chunk = data[start:end]
+
+                # Add header: frame_id, seq, total
+                # frame_id helps distinguish frames if one arrives late
+                header = f"{frame_id}:{i}:{total_chunks}".encode().ljust(30, b' ')
+                packet = header + chunk
+                sock_video.sendto(packet, (UDP_IP, UDP_PORT_VIDEO))
+            
+            frame_id += 1
 
         # Send ADC data at specified interval
         adc_data = {"voltage": read_mcp3008(0)}
