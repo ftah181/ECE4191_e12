@@ -26,6 +26,7 @@ frame_buffer = None  # Buffer for frame reuse
 INFERENCE_SKIP_FRAMES = 20  # Run inference every N frames
 CONF_THRESHOLD = 0.7 # Confidence threshold for predictions
 SAMPLE_RATE = 1000 # Sample rate of ADC data for spectrogram
+BUFFER_SIZE = 2048
 
 
 # -------------------------
@@ -429,29 +430,53 @@ class GUI:
         frame = None
         frames_processed = 0
         max_frames_per_cycle = 5  # Process multiple frames per update to clear buffer
-        
+         
+         # Storage for reassembly
+        if not hasattr(self, "frames_buffer"):
+            self.frames_buffer = {}       # frame_id -> {seq: chunk}
+            self.frames_expected = {}     # frame_id -> total_chunks
+
         # Process multiple frames to prevent buffer buildup
         while frames_processed < max_frames_per_cycle:
             try:
-                # Use non-blocking receive
-                data, addr = self.video_sock.recvfrom(1048576)
-                npdata = np.frombuffer(data, dtype=np.uint8)
-                new_frame = cv2.imdecode(npdata, cv2.IMREAD_COLOR)
-                
-                if new_frame is not None:
-                    # Always use the latest frame (drop older ones)
-                    frame = new_frame
-                    frames_processed += 1
-                    self.frame_count += 1
-                    
-                    # Update status only for the latest frame
-                    if frames_processed == 1:  # Only update status once
-                        self.status_label.config(text=f"Video UDP: {addr[0]}:{addr[1]}")
-                
+                data, addr = self.video_sock.recvfrom(BUFFER_SIZE)  # must be >= CHUNK_SIZE + header
+
+                # Extract header (fixed size 30 bytes in sender code)
+                header = data[:30].decode().strip()
+                frame_id, seq, total = map(int, header.split(":"))
+                chunk = data[30:]
+
+                # Initialize if new frame
+                if frame_id not in self.frames_buffer:
+                    self.frames_buffer[frame_id] = {}
+                    self.frames_expected[frame_id] = total
+
+                # Store chunk
+                self.frames_buffer[frame_id][seq] = chunk
+
+                # If all chunks received → reconstruct
+                if len(self.frames_buffer[frame_id]) == self.frames_expected[frame_id]:
+                    full_data = b''.join(self.frames_buffer[frame_id][i] for i in range(total))
+                    npdata = np.frombuffer(full_data, dtype=np.uint8)
+                    new_frame = cv2.imdecode(npdata, cv2.IMREAD_COLOR)
+
+                    if new_frame is not None:
+                        frame = new_frame
+                        frames_processed += 1
+                        self.frame_count += 1
+
+                        # Update status only for latest frame
+                        if frames_processed == 1:
+                            self.status_label.config(text=f"Video UDP: {addr[0]}:{addr[1]}")
+
+                    # Clean up old frame data
+                    del self.frames_buffer[frame_id]
+                    del self.frames_expected[frame_id]
+
             except socket.error:
-                # No more frames available
+                # No more packets
                 break
-        
+                    
         # If we processed multiple frames, show buffer info
         #if frames_processed > 1:
         #    print(f"Buffer cleared: processed {frames_processed} frames, displaying latest")
