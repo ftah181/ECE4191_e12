@@ -3,8 +3,12 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# --- Training images ---
+# --- Training images and Video Outputs ---
 models/dataset/
+*.jpg
+*.jpeg
+*.mp4
+*.wav
 
 # --- Virtual environment ---
 venv/
