@@ -87,21 +87,7 @@ try:
         # --- Encode and send video frame ---
         ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 30])
         if ret:
-            data = buffer.tobytes()
-            total_chunks = math.ceil(len(data) / CHUNK_SIZE)
-
-            for i in range(total_chunks):
-                start = i * CHUNK_SIZE
-                end = start + CHUNK_SIZE
-                chunk = data[start:end]
-
-                # Add header: frame_id, seq, total
-                # frame_id helps distinguish frames if one arrives late
-                header = f"{frame_id}:{i}:{total_chunks}".encode().ljust(30, b' ')
-                packet = header + chunk
-                sock_video.sendto(packet, (UDP_IP, UDP_PORT_VIDEO))
-            
-            frame_id += 1
+            sock_video.sendto(buffer.tobytes(), (UDP_IP, UDP_PORT_VIDEO))
 
         # Send ADC data at specified interval
         adc_data = {"voltage": read_mcp3008(0)}
