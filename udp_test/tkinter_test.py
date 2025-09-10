@@ -355,10 +355,10 @@ class GUI:
         self.fig, self.ax = plt.subplots(figsize=(6, 3))
         self.fig.patch.set_facecolor('#2C3E50')
         self.ax.set_facecolor('#34495E')
-        self.ax.set_ylim(0, 500)
-        self.ax.set_title("ADC Voltage vs Time", color='white')
+        self.ax.set_ylim(0, 1000)
+        self.ax.set_title("Microphone Data", color='white')
         self.ax.set_xlabel("Time", color='white')
-        self.ax.set_ylabel("Voltage (V)", color='white')
+        self.ax.set_ylabel("Magnitude", color='white')
         self.ax.tick_params(colors='white')
         self.x_data = []
         self.y_data = []
