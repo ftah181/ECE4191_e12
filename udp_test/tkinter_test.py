@@ -17,13 +17,16 @@ from ultralytics import YOLO
 model = YOLO("models/runs/train/my_model/weights/best.pt")
 # model = YOLO("models/yolo11n.pt")
 
-# Global variables for performance optimization
+# Global variables
 frame_skip_counter = 0
-INFERENCE_SKIP_FRAMES = 20  # Run inference every N frames (increased from 3)
 last_predictions = []  # Cache last predictions
 frame_buffer = None  # Buffer for frame reuse
 
+# Params
+INFERENCE_SKIP_FRAMES = 20  # Run inference every N frames
 CONF_THRESHOLD = 0.7 # Confidence threshold for predictions
+SAMPLE_RATE = 1000 # Sample rate of ADC data for spectrogram
+
 
 # -------------------------
 #  Run Inference Model
@@ -287,10 +290,12 @@ class GUI:
         self.detection_title.pack(pady=(10, 5))
         
         # Scrollable frame for animal list
-        self.detection_canvas = tk.Canvas(self.right_frame, bg='#34495E', highlightthickness=0)
-        self.detection_scrollbar = tk.Scrollbar(self.right_frame, orient="vertical", command=self.detection_canvas.yview)
+        self.detection_section = tk.Frame(self.right_frame, bg='#34495E')
+        self.detection_section.pack(side=tk.TOP, fill=tk.BOTH, expand=False, pady=(0, 10))
+        self.detection_canvas = tk.Canvas(self.detection_section, bg='#34495E', highlightthickness=0)
+        self.detection_scrollbar = tk.Scrollbar(self.detection_section, orient="vertical", command=self.detection_canvas.yview)
         self.detection_scrollable_frame = tk.Frame(self.detection_canvas, bg='#34495E')
-        
+
         self.detection_scrollable_frame.bind(
             "<Configure>",
             lambda e: self.detection_canvas.configure(scrollregion=self.detection_canvas.bbox("all"))
@@ -303,7 +308,7 @@ class GUI:
         self.detection_scrollbar.pack(side="right", fill="y", pady=5)
         
         # Clear button
-        self.clear_button = tk.Button(self.right_frame, text="Clear List", 
+        self.clear_button = tk.Button(self.detection_section, text="Clear List", 
                                      command=self.clear_detection_list,
                                      bg='#E74C3C', fg='white', font=("Arial", 10))
         self.clear_button.pack(pady=5)
@@ -350,8 +355,12 @@ class GUI:
         # Bottom left: Voltage Graph
         self.graph_frame = tk.Frame(self.left_frame, bg='#2C3E50')
         self.graph_frame.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
-        
-        # --- Voltage Graph Setup ---
+
+        # Bottom Right: Spectrogram
+        self.spec_frame = tk.Frame(self.right_frame, bg='#2C3E50', height=250)
+        self.spec_frame.pack(side=tk.BOTTOM, fill=tk.X, expand=False)
+
+        # Voltage Graph Setup
         self.fig, self.ax = plt.subplots(figsize=(6, 3))
         self.fig.patch.set_facecolor('#2C3E50')
         self.ax.set_facecolor('#34495E')
@@ -366,6 +375,15 @@ class GUI:
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.graph_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         
+        # Spectogram setup
+        self.fig_spec, self.ax_spec = plt.subplots(figsize=(6, 3))
+        self.ax_spec.set_title("Spectrogram")
+        self.ax_spec.set_xlabel("Time [s]")
+        self.ax_spec.set_ylabel("Frequency [Hz]")
+        self.spectogram_queue = []
+        self.canvas_spec = FigureCanvasTkAgg(self.fig_spec, master=self.spec_frame)
+        self.canvas_spec.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
         # Voltage update counter
         self.voltage_update_counter = 0
         self.plot_time_offset = time.time()
@@ -521,12 +539,16 @@ class GUI:
                     latest_voltage = self.adc_receiver.get_latest_voltage()
                     self.adc_status_label.config(text=f"ADC: {latest_voltage:.3f}V (UDP)")
                     
+                    # Update spectrogram
+                    Pxx, freqs, bins, im = self.ax_spec.specgram(self.y_data, NFFT=1024, Fs=SAMPLE_RATE, noverlap=512, cmap="viridis")
+                    self.canvas_spec.draw()
+
                     # Update plot
                     if len(self.x_data) > 0:
                         self.line.set_data(self.x_data, self.y_data)
                         if len(self.x_data) > 1:
                             self.ax.set_xlim(min(self.x_data), max(self.x_data))
-                        self.canvas.draw_idle()  # Use draw_idle for better performance
+                        self.canvas.draw_idle()
                 else:
                     # No new UDP data, just update status
                     latest_voltage = self.adc_receiver.get_latest_voltage()

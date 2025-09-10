@@ -84,12 +84,12 @@ try:
         if ret:
             sock_video.sendto(buffer.tobytes(), (UDP_IP, UDP_PORT_VIDEO))
 
-        # --- Send ADC data at specified interval ---
+        # Send ADC data at specified interval
         adc_data = {"voltage": read_mcp3008(0)}
         adc_json = json.dumps(adc_data).encode('utf-8')
         sock_adc.sendto(adc_json, (UDP_IP, UDP_PORT_ADC))
         
-        #Calculate samples for rate calculatuion
+        # Calculate samples for rate calculatuion
         sample_count +=1
         if sample_count>= SAMPLE_WINDOW:
             end_time = time.time()
