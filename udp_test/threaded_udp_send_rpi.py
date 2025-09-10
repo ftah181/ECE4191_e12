@@ -8,6 +8,8 @@ from picamera2 import Picamera2
 import spidev
 import RPi.GPIO as GPIO
 
+global running
+
 
 #----UDP Target Settings----
 UDP_IP = "172.20.10.2"
@@ -104,6 +106,9 @@ except KeyboardInterrupt:
     running = False
 
 finally:
+    running = False
+    t1.join()
+    t2.join()
     picam2.stop()
     cv2.destroyAllWindows()
     sock_video.close()
