@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# --- Training images ---
+models/dataset/
+
 # --- Virtual environment ---
 venv/
 roboflow_env/
