@@ -8,12 +8,17 @@ from picamera2 import Picamera2
 import spidev
 import RPi.GPIO as GPIO
 import time
+import math
+
 # -------------------------
 # UDP Target Settings
 # -------------------------
 UDP_IP = "172.20.10.2"  # Change to your laptop's IP if on a network
 UDP_PORT_VIDEO = 5005     # Port for video frames
 UDP_PORT_ADC = 5006       # Port for ADC data
+
+CHUNK_SIZE = 528
+frame_id = 0
 
 sock_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock_adc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -84,12 +89,12 @@ try:
         if ret:
             sock_video.sendto(buffer.tobytes(), (UDP_IP, UDP_PORT_VIDEO))
 
-        # --- Send ADC data at specified interval ---
+        # Send ADC data at specified interval
         adc_data = {"voltage": read_mcp3008(0)}
         adc_json = json.dumps(adc_data).encode('utf-8')
         sock_adc.sendto(adc_json, (UDP_IP, UDP_PORT_ADC))
         
-        #Calculate samples for rate calculatuion
+        # Calculate samples for rate calculatuion
         sample_count +=1
         if sample_count>= SAMPLE_WINDOW:
             end_time = time.time()

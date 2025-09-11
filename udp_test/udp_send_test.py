@@ -8,9 +8,11 @@ import random
 # -------------------------
 # UDP Target Settings
 # -------------------------
-UDP_IP = "118.138.90.109"  # Change to your laptop's IP if on a network
+UDP_IP = "118.138.125.2"  # Change to your laptop's IP if on a network
 UDP_PORT_VIDEO = 5005     # Port for video frames
 UDP_PORT_ADC = 5006       # Port for ADC data
+
+CHUNK_SIZE = 1400
 
 sock_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock_adc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
