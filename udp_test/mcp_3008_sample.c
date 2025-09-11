@@ -36,7 +36,7 @@ double sample_mcp3008(int channel, int num_samples, uint16_t *out_samples)
     bcm2835_spi_setBitOrder(BCM2835_SPI_BIT_ORDER_MSBFIRST);
     bcm2835_spi_setDataMode(BCM2835_SPI_MODE0);
     bcm2835_spi_setClockDivider(BCM2835_SPI_CLOCK_DIVIDER_64); // ~1 MHz
-    bcm2835_gpio_fsel(CS_PIN, BCM2835_GPIO_FSEL_OUT);
+    bcm2835_gpio_fsel(CS_PIN, BCM2835_GPIO_FSEL_OUTP);
     bcm2835_gpio_write(CS_PIN, HIGH);
 
     const double SAMPLE_RATE = 20000.0; // Hz
