@@ -204,8 +204,6 @@ class ADCReceiver(threading.Thread):
     def run(self):
         while self.running:
             try:
-                print("running")
-
                 data, addr = self.sock.recvfrom(4096)
                 json_str = data.decode('utf-8')
                 adc_data = json.loads(json_str)
@@ -245,7 +243,7 @@ class ADCReceiver(threading.Thread):
 # Video Receiving Thread
 # -------------------------
 class VideoReceiver(threading.Thread):
-    def __init__(self, udp_ip, video_port, max_queue=3):
+    def __init__(self, udp_ip, video_port, max_queue=1):
         super().__init__(daemon=True)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576 * 4)
