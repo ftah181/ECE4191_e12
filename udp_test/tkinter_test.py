@@ -23,10 +23,11 @@ last_predictions = []  # Cache last predictions
 frame_buffer = None  # Buffer for frame reuse
 
 # Params
-INFERENCE_SKIP_FRAMES = 20  # Run inference every N frames
+INFERENCE_SKIP_FRAMES = 30  # Run inference every N frames
 CONF_THRESHOLD = 0.7 # Confidence threshold for predictions
 SAMPLE_RATE = 1000 # Sample rate of ADC data for spectrogram
 BUFFER_SIZE = 2048
+PLOT_X_LENGTH = 1024
 
 
 # -------------------------
@@ -176,7 +177,7 @@ class ADCReceiver(threading.Thread):
         self.udp_port = udp_port
         self.running = True
         self.latest_voltage = 0.0
-        self.data_queue = queue.Queue(maxsize=100)
+        self.data_queue = queue.Queue(maxsize=1024)
         
         # Setup UDP socket for ADC data
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -203,31 +204,33 @@ class ADCReceiver(threading.Thread):
     def run(self):
         while self.running:
             try:
-                data, addr = self.sock.recvfrom(1024)
+                print("running")
+
+                data, addr = self.sock.recvfrom(4096)
                 json_str = data.decode('utf-8')
                 adc_data = json.loads(json_str)
-                
-                # Update latest voltage
-                self.latest_voltage = adc_data.get('voltage', 0.0)
-                #print(self.latest_voltage)
-                
-                # Add to queue for plotting
-                try:
-                    self.data_queue.put_nowait({
-                        'voltage': self.latest_voltage,
-                        'timestamp': adc_data.get('timestamp', time.time())
-                    })
-                except queue.Full:
-                    # Remove oldest data if queue is full
-                    try:
-                        self.data_queue.get_nowait()
-                        self.data_queue.put_nowait({
-                            'voltage': self.latest_voltage,
-                            'timestamp': adc_data.get('timestamp', time.time())
-                        })
-                    except:
-                        pass
-                        
+
+                # Expect adc_data like: {"voltages": [...], "timestamp": ...}
+                voltages = adc_data.get("voltages", [])
+                timestamp = adc_data.get("timestamp", time.time())
+
+                if voltages:
+                    # Latest voltage is the last one in the list
+                    self.latest_voltage = voltages[-1]
+
+                    # Add each voltage to queue with timestamp
+                    for v in voltages:
+                        entry = {"voltage": v, "timestamp": timestamp}
+                        try:
+                            self.data_queue.put_nowait(entry)
+                        except queue.Full:
+                            # Remove oldest if queue full
+                            try:
+                                self.data_queue.get_nowait()
+                                self.data_queue.put_nowait(entry)
+                            except:
+                                pass
+
             except socket.timeout:
                 continue
             except Exception as e:
@@ -238,7 +241,47 @@ class ADCReceiver(threading.Thread):
         if hasattr(self, 'sock'):
             self.sock.close()
 
+# -------------------------
+# Video Receiving Thread
+# -------------------------
+class VideoReceiver(threading.Thread):
+    def __init__(self, udp_ip, video_port, max_queue=3):
+        super().__init__(daemon=True)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576 * 4)
+        self.sock.bind((udp_ip, video_port))
+        self.sock.setblocking(False)
+        self.frame_queue = queue.Queue(maxsize=max_queue)
+        self.running = True
 
+    def run(self):
+        while self.running:
+            try:
+                data, addr = self.sock.recvfrom(1048576)
+                npdata = np.frombuffer(data, dtype=np.uint8)
+                frame = cv2.imdecode(npdata, cv2.IMREAD_COLOR)
+                if frame is not None:
+                    # Always keep only the latest frame
+                    while not self.frame_queue.empty():
+                        try:
+                            self.frame_queue.get_nowait()
+                        except queue.Empty:
+                            break
+                    self.frame_queue.put_nowait(frame)
+            except socket.error:
+                time.sleep(0.001)
+            except Exception:
+                continue
+
+    def get_latest_frame(self):
+        try:
+            return self.frame_queue.get_nowait()
+        except queue.Empty:
+            return None
+
+    def stop(self):
+        self.running = False
+        self.sock.close()
 
 # -------------------------
 # Tkinter GUI
@@ -253,15 +296,9 @@ class GUI:
         # Performance settings
         self.skip_inference = tk.BooleanVar(value=False)
         
-        # Setup Video UDP Socket with larger buffer
-        self.video_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.video_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576 * 4)
-        try:
-            self.video_sock.bind((udp_ip, video_port))
-            self.video_sock.setblocking(False)
-            print(f"Video UDP socket bound to {udp_ip}:{video_port}")
-        except Exception as e:
-            print(f"Video socket binding error: {e}")
+        # Setup video receiver thread
+        self.video_receiver = VideoReceiver(udp_ip, video_port)
+        self.video_receiver.start()
         
         # Setup ADC receiver thread
         self.adc_receiver = ADCReceiver(adc_port)
@@ -365,13 +402,14 @@ class GUI:
         self.fig, self.ax = plt.subplots(figsize=(6, 3))
         self.fig.patch.set_facecolor('#2C3E50')
         self.ax.set_facecolor('#34495E')
-        self.ax.set_ylim(0, 1000)
+        self.ax.set_ylim(0, 5)
         self.ax.set_title("Microphone Data", color='white')
         self.ax.set_xlabel("Time", color='white')
         self.ax.set_ylabel("Magnitude", color='white')
         self.ax.tick_params(colors='white')
         self.x_data = []
         self.y_data = []
+        self.time_window = 10  
         self.line, = self.ax.plot([], [], 'r-', linewidth=2)
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.graph_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
@@ -429,33 +467,20 @@ class GUI:
     def update(self):
         frame = None
         frames_processed = 0
-        max_frames_per_cycle = 5  # Process multiple frames per update to clear buffer
+
+        # Use non-blocking receive
+        new_frame = self.video_receiver.get_latest_frame()
         
-        # Process multiple frames to prevent buffer buildup
-        while frames_processed < max_frames_per_cycle:
-            try:
-                # Use non-blocking receive
-                data, addr = self.video_sock.recvfrom(1048576)
-                npdata = np.frombuffer(data, dtype=np.uint8)
-                new_frame = cv2.imdecode(npdata, cv2.IMREAD_COLOR)
-                
-                if new_frame is not None:
-                    # Always use the latest frame (drop older ones)
-                    frame = new_frame
-                    frames_processed += 1
-                    self.frame_count += 1
+        if new_frame is not None:
+            # Always use the latest frame (drop older ones)
+            frame = new_frame
+            frames_processed += 1
+            self.frame_count += 1
+            
+            # Update status only for the latest frame
+            if frames_processed == 1:  # Only update status once
+                self.status_label.config(text=f"Video UDP:")   
                     
-                    # Update status only for the latest frame
-                    if frames_processed == 1:  # Only update status once
-                        self.status_label.config(text=f"Video UDP: {addr[0]}:{addr[1]}")
-                
-            except socket.error:
-                # No more frames available
-                break
-                    
-        # If we processed multiple frames, show buffer info
-        #if frames_processed > 1:
-        #    print(f"Buffer cleared: processed {frames_processed} frames, displaying latest")
         
         # Process the latest frame if available
         if frame is not None:
@@ -464,7 +489,7 @@ class GUI:
                 if self.skip_inference.get():
                     processed_frame = frame
                 else:
-                    # Always use threaded inference
+                    # Pass frame to inference thread
                     self.inference_worker.add_frame(frame)
                     
                     # Check for completed inference
@@ -529,7 +554,7 @@ class GUI:
                         
                         # Add to plot data
                         current_time = time.time() - self.plot_time_offset
-                        if len(self.x_data) >= 100:  # Keep last 100 points
+                        if len(self.x_data) >= PLOT_X_LENGTH:
                             self.x_data = self.x_data[1:]
                             self.y_data = self.y_data[1:]
                         
@@ -546,9 +571,15 @@ class GUI:
 
                     # Update plot
                     if len(self.x_data) > 0:
+                        # Keep only data within time_window
+                        while self.x_data and (self.x_data[-1] - self.x_data[0]) > self.time_window:
+                            self.x_data.pop(0)
+                            self.y_data.pop(0)
+
                         self.line.set_data(self.x_data, self.y_data)
                         if len(self.x_data) > 1:
-                            self.ax.set_xlim(min(self.x_data), max(self.x_data))
+                            self.ax.set_xlim(self.x_data[0], self.x_data[0] + self.time_window)
+
                         self.canvas.draw_idle()
                 else:
                     # No new UDP data, just update status
@@ -562,7 +593,7 @@ class GUI:
                 print(f"Plot update error: {e}")
 
         # Faster update cycle - consider making this adaptive
-        self.root.after(10, self.update)  # Increased frequency to clear buffer faster
+        self.root.after(5, self.update)  # Increase frequency to clear buffer faster
     
     def resize_for_display(self, frame):
         """Resize frame for display with reasonable size limits"""
@@ -638,6 +669,8 @@ class GUI:
             self.adc_receiver.stop()
         if hasattr(self, 'video_sock'):
             self.video_sock.close()
+        if hasattr(self, 'video_receiver'):
+            self.video_receiver.stop()
         if self.video_out is not None:
             self.video_out.release()
 

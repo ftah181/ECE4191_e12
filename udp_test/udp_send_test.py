@@ -8,7 +8,7 @@ import random
 # -------------------------
 # UDP Target Settings
 # -------------------------
-UDP_IP = "118.138.125.2"  # Change to your laptop's IP if on a network
+UDP_IP = "192.168.1.119"  # Change to your laptop's IP if on a network
 UDP_PORT_VIDEO = 5005     # Port for video frames
 UDP_PORT_ADC = 5006       # Port for ADC data
 
@@ -25,12 +25,10 @@ def simulate_adc_reading():
     # Simulate voltage reading with some variation (0-3.3V range)
     voltage = round(1.65 + 0.8 * np.sin(time.time() * 0.5) + random.uniform(-0.1, 0.1), 3)
     voltage = max(0.0, min(3.3, voltage))  # Clamp between 0 and 3.3V
-    
-    reading = {
-        'timestamp': time.time(),
-        'voltage': voltage
-    }
-    return reading
+    voltage = voltage.item()
+
+    voltage = [voltage] * 1024
+    return voltage
 
 # -------------------------
 # Webcam Capture
@@ -63,7 +61,8 @@ try:
         current_time = time.time()
         if current_time - last_adc_time >= adc_interval:
             adc_data = simulate_adc_reading()
-            adc_json = json.dumps(adc_data).encode('utf-8')
+
+            adc_json = json.dumps({"voltages": adc_data}).encode("utf-8")
             sock_adc.sendto(adc_json, (UDP_IP, UDP_PORT_ADC))
             last_adc_time = current_time
             
