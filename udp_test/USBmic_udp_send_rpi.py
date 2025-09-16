@@ -53,16 +53,22 @@ try:
             sock_video.sendto(buffer.tobytes(), (UDP_IP, UDP_PORT_VIDEO))
 
         # --- Capture and send audio as JSON ---
-        audio_data = stream.read(CHUNK, exception_on_overflow=False)
-        samples = np.frombuffer(audio_data, dtype=np.int16).tolist()
+        audio_data = stream.read(CHUNK, exception_on_overflow=False) #1024 samples at 16khz is not about 64ms of audio- not long enough for detection
 
+        audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
+        audio_np = audio_np / 32768.0 # normalizing the values betweel [-1 to 1] - would need to update the plot on gui
+
+        # Convert to list for JSON
+        samples = audio_np.tolist()
+
+        # Convert to JSON and send
         audio_json = json.dumps({"voltages": samples}).encode("utf-8")
         sock_audio.sendto(audio_json, (UDP_IP, UDP_PORT_AUDIO))
 
         # Debug print
-        print(f"Sent {len(samples)} samples")
+        #print(f"Sent {len(samples)} samples")
 
-        time.sleep(0.01)
+        #time.sleep(0.01)
 
 except KeyboardInterrupt:
     print("\nStopping...")
