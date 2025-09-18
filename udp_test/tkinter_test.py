@@ -13,9 +13,8 @@ from inference import get_model
 from ultralytics import YOLO
 
 # Load model
-#model = get_model("animal-detection-evlon/3", api_key="lnHqcMh4NynT1If5FC38")
-model = YOLO("models/runs/train/my_model/weights/best.pt")
-# model = YOLO("models/yolo11n.pt")
+# model = YOLO("models/runs/train/my_model/weights/best.pt")
+model = YOLO("Model_HL_16-09.pt")
 
 # Global variables
 frame_skip_counter = 0
@@ -27,7 +26,7 @@ INFERENCE_SKIP_FRAMES = 30  # Run inference every N frames
 CONF_THRESHOLD = 0.7 # Confidence threshold for predictions
 SAMPLE_RATE = 1000 # Sample rate of ADC data for spectrogram
 BUFFER_SIZE = 2048
-PLOT_X_LENGTH = 1024
+PLOT_X_LENGTH = 1024*10
 
 
 # -------------------------
@@ -177,13 +176,13 @@ class ADCReceiver(threading.Thread):
         self.udp_port = udp_port
         self.running = True
         self.latest_voltage = 0.0
-        self.data_queue = queue.Queue(maxsize=1024)
+        self.data_queue = queue.Queue(maxsize=1024*5)
         
         # Setup UDP socket for ADC data
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             self.sock.bind(("0.0.0.0", udp_port))
-            self.sock.settimeout(0.1)  # Non-blocking with timeout
+            self.sock.settimeout(1)  # Non-blocking with timeout
             print(f"ADC UDP socket bound to port {udp_port}")
         except Exception as e:
             print(f"ADC socket binding error: {e}")
@@ -204,7 +203,7 @@ class ADCReceiver(threading.Thread):
     def run(self):
         while self.running:
             try:
-                data, addr = self.sock.recvfrom(4096)
+                data, addr = self.sock.recvfrom(65535)
                 json_str = data.decode('utf-8')
                 adc_data = json.loads(json_str)
 
@@ -230,9 +229,11 @@ class ADCReceiver(threading.Thread):
                                 pass
 
             except socket.timeout:
+                print("socket timeout")
                 continue
             except Exception as e:
-                continue  # Silent error handling
+                print("JSON error")
+                continue 
     
     def stop(self):
         self.running = False
@@ -400,14 +401,14 @@ class GUI:
         self.fig, self.ax = plt.subplots(figsize=(6, 3))
         self.fig.patch.set_facecolor('#2C3E50')
         self.ax.set_facecolor('#34495E')
-        self.ax.set_ylim(0, 5)
+        self.ax.set_ylim(-0.01, 0.01)
         self.ax.set_title("Microphone Data", color='white')
         self.ax.set_xlabel("Time", color='white')
         self.ax.set_ylabel("Magnitude", color='white')
         self.ax.tick_params(colors='white')
         self.x_data = []
         self.y_data = []
-        self.time_window = 10  
+        self.time_window = 5  
         self.line, = self.ax.plot([], [], 'r-', linewidth=2)
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.graph_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
@@ -564,8 +565,8 @@ class GUI:
                     self.adc_status_label.config(text=f"ADC: {latest_voltage:.3f}V (UDP)")
                     
                     # Update spectrogram
-                    Pxx, freqs, bins, im = self.ax_spec.specgram(self.y_data, NFFT=1024, Fs=SAMPLE_RATE, noverlap=512, cmap="viridis")
-                    self.canvas_spec.draw()
+                    # Pxx, freqs, bins, im = self.ax_spec.specgram(self.y_data, NFFT=1024, Fs=SAMPLE_RATE, noverlap=512, cmap="viridis")
+                    # self.canvas_spec.draw()
 
                     # Update plot
                     if len(self.x_data) > 0:
