@@ -66,7 +66,7 @@ try:
         sock_audio.sendto(audio_json, (UDP_IP, UDP_PORT_AUDIO))
 
         # Debug print
-        #print(f"Sent {len(samples)} samples")
+        print(samples)
 
         #time.sleep(0.01)
 

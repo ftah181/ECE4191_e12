@@ -76,7 +76,6 @@ def adc_thread():
             start_time = time.time()
 
         print(f"[ADC] {adc_values}")
-        time.sleep(0.01)
 
 # -------------------------
 # Main
