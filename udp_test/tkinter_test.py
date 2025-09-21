@@ -9,12 +9,34 @@ import threading
 import queue
 import time
 import json
-from inference import get_model
 from ultralytics import YOLO
+import tensorflow as tf
+import tensorflow_hub as hub
+from tensorflow.keras.models import load_model
+import pickle
 
 # Load model
 # model = YOLO("models/runs/train/my_model/weights/best.pt")
 model = YOLO("Model_HL_16-09.pt")
+
+# Load audio classification models
+try:
+    # Load label encoder
+    with open("label_encoder.pkl", "rb") as f:
+        label_encoder = pickle.load(f)
+    
+    # Load trained classifier
+    audio_classifier = load_model("yamnet_audio_classifier.h5")
+    
+    # Load YAMNet
+    yamnet_model = hub.load("https://tfhub.dev/google/yamnet/1")
+    
+    print("Audio classification models loaded successfully")
+except Exception as e:
+    print(f"Error loading audio models: {e}")
+    label_encoder = None
+    audio_classifier = None
+    yamnet_model = None
 
 # Global variables
 frame_skip_counter = 0
@@ -22,11 +44,17 @@ last_predictions = []  # Cache last predictions
 frame_buffer = None  # Buffer for frame reuse
 
 # Params
-INFERENCE_SKIP_FRAMES = 30  # Run inference every N frames
-CONF_THRESHOLD = 0.7 # Confidence threshold for predictions
-SAMPLE_RATE = 1000 # Sample rate of ADC data for spectrogram
+INFERENCE_SKIP_FRAMES = 30      # Run inference every N frames
+CONF_THRESHOLD = 0.7            # Confidence threshold for predictions
+SAMPLE_RATE = 1000              # Sample rate of ADC data for spectrogram
 BUFFER_SIZE = 2048
-PLOT_X_LENGTH = 1024*10
+PLOT_X_LENGTH = 1024*100       
+AUDIO_SAMPLES = 1024*200         # ~ 13 seconds worth of data
+
+# Audio classification params
+AUDIO_CLASSIFICATION_INTERVAL = 5.0  # Run audio classification every N seconds
+AUDIO_CLASSIFICATION_CONFIDENCE = 0.5  # Minimum confidence for audio predictions
+YAMNET_SAMPLE_RATE = 16000  # YAMNet expects 16kHz audio
 
 
 # -------------------------
@@ -168,6 +196,133 @@ class InferenceWorker(threading.Thread):
         self.running = False
 
 # -------------------------
+# Audio Classification Functions
+# -------------------------
+def extract_embedding(waveform):
+    """Extract YAMNet embedding from audio waveform"""
+    if yamnet_model is None:
+        return None
+    
+    try:
+        waveform = tf.convert_to_tensor(waveform, dtype=tf.float32)
+        scores, embeddings, spec = yamnet_model(waveform)
+        return tf.reduce_mean(embeddings, axis=0).numpy()
+    except Exception as e:
+        print(f"Error extracting embedding: {e}")
+        return None
+
+def classify_audio(audio_data):
+    """Classify audio data using the trained model"""
+    if audio_classifier is None or label_encoder is None:
+        return None, 0.0
+    
+    try:
+        # Convert to numpy array if it's a list
+        if isinstance(audio_data, list):
+            audio_np = np.array(audio_data, dtype=np.float32)
+        else:
+            audio_np = audio_data.astype(np.float32)
+        
+        # Resample to 16kHz if needed (YAMNet requirement)
+        if len(audio_np) > 0:
+            # Simple resampling - for better quality, use librosa.resample
+            if len(audio_np) != YAMNET_SAMPLE_RATE:
+                # Basic linear interpolation resampling
+                indices = np.linspace(0, len(audio_np) - 1, YAMNET_SAMPLE_RATE)
+                audio_np = np.interp(indices, np.arange(len(audio_np)), audio_np)
+        
+        # Extract embedding
+        embedding = extract_embedding(audio_np)
+        if embedding is None:
+            return None, 0.0
+        
+        # Reshape for prediction
+        embedding = embedding.reshape(1, -1)
+        
+        # Predict
+        prediction = audio_classifier.predict(embedding, verbose=0)
+        predicted_class_idx = np.argmax(prediction)
+        confidence = float(prediction[0][predicted_class_idx])
+        
+        # Decode class name
+        predicted_class = label_encoder.inverse_transform([predicted_class_idx])[0]
+        
+        return predicted_class, confidence
+        
+    except Exception as e:
+        print(f"Error classifying audio: {e}")
+        return None, 0.0
+
+# -------------------------
+# Audio Classification Worker Thread
+# -------------------------
+class AudioClassificationWorker(threading.Thread):
+    def __init__(self, adc_receiver):
+        super().__init__(daemon=True)
+        self.adc_receiver = adc_receiver
+        self.running = True
+        self.last_classification_time = 0
+        self.result_queue = queue.Queue(maxsize=5)
+        
+    def get_result(self):
+        """Get latest audio classification result"""
+        try:
+            return self.result_queue.get_nowait()
+        except queue.Empty:
+            return None
+    
+    def run(self):
+        while self.running:
+            try:
+                current_time = time.time()
+                
+                # Check if it's time for classification
+                if current_time - self.last_classification_time >= AUDIO_CLASSIFICATION_INTERVAL:
+                    # Get audio data from ADC receiver
+                    audio_data = self.adc_receiver.get_voltage_data()
+                    
+                    if len(audio_data) > 0:
+                        # Extract voltage values for classification
+                        voltage_values = [entry['voltage'] for entry in audio_data]
+                        
+                        # Classify audio
+                        predicted_class, confidence = classify_audio(voltage_values)
+                        
+                        if predicted_class is not None and confidence >= AUDIO_CLASSIFICATION_CONFIDENCE:
+                            # Add result to queue
+                            result = {
+                                'class': predicted_class,
+                                'confidence': confidence,
+                                'timestamp': current_time
+                            }
+                            
+                            # Keep only latest results
+                            try:
+                                while not self.result_queue.empty():
+                                    self.result_queue.get_nowait()
+                            except queue.Empty:
+                                pass
+                            
+                            try:
+                                self.result_queue.put_nowait(result)
+                            except queue.Full:
+                                pass
+                            
+                            print(f"Audio classification: {predicted_class} (confidence: {confidence:.3f})")
+                    
+                    self.last_classification_time = current_time
+                
+                # Sleep to prevent excessive CPU usage
+                time.sleep(0.1)
+                
+            except Exception as e:
+                print(f"Audio classification error: {e}")
+                time.sleep(1.0)
+    
+    def stop(self):
+        self.running = False
+
+# -------------------------
 # ADC Data Receiver Thread
 # -------------------------
 class ADCReceiver(threading.Thread):
@@ -176,7 +331,7 @@ class ADCReceiver(threading.Thread):
         self.udp_port = udp_port
         self.running = True
         self.latest_voltage = 0.0
-        self.data_queue = queue.Queue(maxsize=1024*5)
+        self.data_queue = queue.Queue(maxsize=AUDIO_SAMPLES)
         
         # Setup UDP socket for ADC data
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -312,6 +467,15 @@ class GUI:
         self.inference_worker = InferenceWorker()
         self.inference_worker.start()
         self.last_inference_result = None
+        
+        # Threading for audio classification (only if models loaded successfully)
+        if audio_classifier is not None and label_encoder is not None and yamnet_model is not None:
+            self.audio_classification_worker = AudioClassificationWorker(self.adc_receiver)
+            self.audio_classification_worker.start()
+            print("Audio classification thread started")
+        else:
+            self.audio_classification_worker = None
+            print("Audio classification disabled - models not loaded")
         
         # Main layout: Left side for video and graph, right side reserved
         self.left_frame = tk.Frame(root, bg='#2C3E50')
@@ -499,6 +663,12 @@ class GUI:
                         # Update detection list with new predictions
                         _, predictions = result
                         self.update_detection_list(predictions)
+                
+                # Check for audio classification results
+                if self.audio_classification_worker is not None:
+                    audio_result = self.audio_classification_worker.get_result()
+                    if audio_result is not None:
+                        self.update_audio_detection_list(audio_result)
                     
                     # Use last result or original frame
                     if self.last_inference_result is not None:
@@ -654,6 +824,49 @@ class GUI:
                     self.detection_canvas.update_idletasks()
                     self.detection_canvas.yview_moveto(1.0)
     
+    def update_audio_detection_list(self, audio_result):
+        """Update the detection list with audio classification results"""
+        import datetime
+        
+        current_time = datetime.datetime.now().strftime("%H:%M:%S")
+        predicted_class = audio_result['class'].lower()
+        confidence = audio_result['confidence']
+        
+        # Only add if this audio class hasn't been detected recently (within last 30 seconds)
+        current_timestamp = time.time()
+        recent_audio_detections = [d for d in self.detection_list 
+                                 if d.get('type') == 'audio' and 
+                                 (current_timestamp - d.get('timestamp', 0)) < 30]
+        
+        if not any(d['animal'].lower() == predicted_class for d in recent_audio_detections):
+            self.detection_counter += 1
+            
+            # Create detection entry
+            detection_frame = tk.Frame(self.detection_scrollable_frame, bg='#8E44AD', 
+                                     relief=tk.RAISED, bd=1)
+            detection_frame.pack(fill=tk.X, padx=5, pady=2)
+            
+            # Detection info
+            info_text = f"#{self.detection_counter}: {audio_result['class']} (Audio)\nConfidence: {confidence:.2f}\nTime: {current_time}"
+            detection_label = tk.Label(detection_frame, text=info_text, 
+                                     bg='#8E44AD', fg='white', font=("Arial", 9),
+                                     justify=tk.LEFT)
+            detection_label.pack(padx=5, pady=3)
+            
+            # Store detection info
+            self.detection_list.append({
+                'frame': detection_frame,
+                'animal': audio_result['class'],
+                'confidence': confidence,
+                'time': current_time,
+                'type': 'audio',
+                'timestamp': current_timestamp
+            })
+            
+            # Auto-scroll to bottom
+            self.detection_canvas.update_idletasks()
+            self.detection_canvas.yview_moveto(1.0)
+    
     def clear_detection_list(self):
         """Clear all detections from the list"""
         for detection in self.detection_list:
@@ -664,6 +877,8 @@ class GUI:
     def __del__(self):
         if hasattr(self, 'inference_worker'):
             self.inference_worker.stop()
+        if hasattr(self, 'audio_classification_worker'):
+            self.audio_classification_worker.stop()
         if hasattr(self, 'adc_receiver'):
             self.adc_receiver.stop()
         if hasattr(self, 'video_sock'):
@@ -687,6 +902,8 @@ if __name__ == "__main__":
     finally:
         if hasattr(app, 'inference_worker'):
             app.inference_worker.stop()
+        if hasattr(app, 'audio_classification_worker'):
+            app.audio_classification_worker.stop()
         if hasattr(app, 'adc_receiver'):
             app.adc_receiver.stop()
         if hasattr(app, 'video_sock'):
