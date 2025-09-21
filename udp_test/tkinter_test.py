@@ -14,6 +14,7 @@ import tensorflow as tf
 import tensorflow_hub as hub
 from tensorflow.keras.models import load_model
 import pickle
+import wave
 
 # Load model
 # model = YOLO("models/runs/train/my_model/weights/best.pt")
@@ -50,9 +51,13 @@ PLOT_X_LENGTH = 1024*100
 AUDIO_SAMPLES = 1024*200         # ~ 13 seconds worth of data
 
 # Audio classification params
-AUDIO_CLASSIFICATION_INTERVAL = 5.0  # Run audio classification every N seconds
-AUDIO_CLASSIFICATION_CONFIDENCE = 0.5  # Minimum confidence for audio predictions
-YAMNET_SAMPLE_RATE = 16000  # YAMNet expects 16kHz audio
+AUDIO_CLASSIFICATION_INTERVAL = 5.0     # Run audio classification every N seconds
+AUDIO_CLASSIFICATION_CONFIDENCE = 0.5   # Minimum confidence for audio predictions
+YAMNET_SAMPLE_RATE = 16000              # YAMNet expects 16kHz audio
+
+# Audio recording params
+AUDIO_SAMPLE_RATE = 16000               # Audio recording sample rate
+AUDIO_CHUNK_SIZE = 16000                # Save audio in 1-second chunks
 
 
 # -------------------------
@@ -541,6 +546,11 @@ class GUI:
         self.adc_status_label = tk.Label(self.video_frame, text="ADC: Waiting...", 
                                        font=("Arial", 10), fg="green")
         self.adc_status_label.pack()
+        
+        # Recording status label
+        self.recording_status_label = tk.Label(self.video_frame, text="Recording: Ready", 
+                                             font=("Arial", 10), fg="orange")
+        self.recording_status_label.pack()
 
         # Video display with proper sizing
         self.video_label = tk.Label(self.video_frame, bg="black")
@@ -578,7 +588,14 @@ class GUI:
         # Setup VideoWriter
         self.video_out = None
         self.recording = False
-        self.video_filename = "output.mp4"
+        self.video_filename = None
+        self.audio_filename = None
+        
+        # Setup Audio Recording
+        self.audio_out = None
+        self.audio_data_buffer = []
+        self.audio_start_time = None
+        self.audio_chunk_count = 0
 
         # Recording button
         self.record_button = tk.Button(root, text="Start Recording", command=self.toggle_recording)
@@ -586,20 +603,127 @@ class GUI:
 
         self.update()  # start loop
 
+    def generate_recording_filenames(self):
+        """Generate timestamped filenames for video and audio recordings"""
+        from datetime import datetime
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.video_filename = f"recording_video_{timestamp}.mp4"
+        self.audio_filename = f"recording_audio_{timestamp}.wav"
+        
+        print(f"Recording filenames generated:")
+        print(f"  Video: {self.video_filename}")
+        print(f"  Audio: {self.audio_filename}")
+
     def toggle_recording(self):
         if not self.recording:
+            # Generate timestamped filenames
+            self.generate_recording_filenames()
+            
             # Start recording
             self.recording = True
             self.record_button.config(text="Stop Recording")
-            print("Recording started")
+            self.audio_start_time = time.time()
+            self.audio_data_buffer = []
+            self.audio_chunk_count = 0
+            
+            # Initialize audio file for streaming
+            self.init_audio_file()
+            
+            # Update status label
+            self.recording_status_label.config(text=f"Recording: {self.video_filename}", fg="red")
+            
+            print("Recording started (video + audio)")
         else:
             # Stop recording
             self.recording = False
             self.record_button.config(text="Start Recording")
+            
+            # Stop video recording
             if self.video_out is not None:
                 self.video_out.release()
                 self.video_out = None
+            
+            # Finalize audio recording
+            self.finalize_audio_recording()
+            
+            # Update status label
+            self.recording_status_label.config(text="Recording: Ready", fg="orange")
+            
             print("Recording stopped")
+    
+    def init_audio_file(self):
+        """Initialize the audio file for streaming recording"""
+        try:
+            self.audio_out = wave.open(self.audio_filename, 'w')
+            self.audio_out.setnchannels(1)  # Mono
+            self.audio_out.setsampwidth(2)  # 2 bytes per sample (16-bit)
+            self.audio_out.setframerate(AUDIO_SAMPLE_RATE)
+            print(f"Audio file initialized: {self.audio_filename}")
+        except Exception as e:
+            print(f"Error initializing audio file: {e}")
+            self.audio_out = None
+    
+    def write_audio_chunk(self):
+        """Write accumulated audio data to file in chunks"""
+        if self.audio_out is not None and len(self.audio_data_buffer) >= AUDIO_CHUNK_SIZE:
+            try:
+                # Get chunk of data
+                chunk_data = self.audio_data_buffer[:AUDIO_CHUNK_SIZE]
+                self.audio_data_buffer = self.audio_data_buffer[AUDIO_CHUNK_SIZE:]
+                
+                # Convert to audio samples
+                audio_data = np.array(chunk_data, dtype=np.float32)
+                
+                # Normalize to [-1, 1] range
+                if np.max(np.abs(audio_data)) > 0:
+                    audio_data = audio_data / np.max(np.abs(audio_data))
+                
+                # Convert to 16-bit integers
+                audio_data = (audio_data * 32767).astype(np.int16)
+                
+                # Write to file
+                self.audio_out.writeframes(audio_data.tobytes())
+                self.audio_chunk_count += 1
+                
+                if self.audio_chunk_count % 10 == 0:  # Print every 10 seconds
+                    print(f"Audio: {self.audio_chunk_count} seconds recorded")
+                    
+            except Exception as e:
+                print(f"Error writing audio chunk: {e}")
+    
+    def finalize_audio_recording(self):
+        """Finalize the audio recording and close the file"""
+        try:
+            # Write any remaining data
+            if len(self.audio_data_buffer) > 0:
+                audio_data = np.array(self.audio_data_buffer, dtype=np.float32)
+                
+                # Normalize to [-1, 1] range
+                if np.max(np.abs(audio_data)) > 0:
+                    audio_data = audio_data / np.max(np.abs(audio_data))
+                
+                # Convert to 16-bit integers
+                audio_data = (audio_data * 32767).astype(np.int16)
+                
+                # Write remaining data
+                if self.audio_out is not None:
+                    self.audio_out.writeframes(audio_data.tobytes())
+            
+            # Close the file
+            if self.audio_out is not None:
+                self.audio_out.close()
+                self.audio_out = None
+                
+            total_samples = (self.audio_chunk_count * AUDIO_CHUNK_SIZE) + len(self.audio_data_buffer)
+            duration = total_samples / AUDIO_SAMPLE_RATE
+            print(f"Audio recording completed: {self.audio_filename} ({duration:.1f} seconds)")
+            
+        except Exception as e:
+            print(f"Error finalizing audio recording: {e}")
+        finally:
+            self.audio_data_buffer = []
+            self.audio_chunk_count = 0
     
     def calculate_fps(self):
         """Calculate and update FPS display"""
@@ -705,6 +829,12 @@ class GUI:
                     # Process all received voltage data
                     for voltage_data in voltage_data_list:
                         voltage = voltage_data['voltage']
+                        
+                        # Add to audio recording buffer if recording
+                        if self.recording:
+                            self.audio_data_buffer.append(voltage)
+                            # Write audio chunks periodically to prevent memory buildup
+                            self.write_audio_chunk()
                         
                         # Add to plot data
                         current_time = time.time() - self.plot_time_offset
@@ -868,6 +998,9 @@ class GUI:
             self.video_receiver.stop()
         if self.video_out is not None:
             self.video_out.release()
+        # Save any remaining audio data
+        if hasattr(self, 'recording') and self.recording:
+            self.finalize_audio_recording()
 
 # -------------------------
 # Run
