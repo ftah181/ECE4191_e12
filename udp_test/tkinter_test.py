@@ -46,8 +46,6 @@ frame_buffer = None  # Buffer for frame reuse
 # Params
 INFERENCE_SKIP_FRAMES = 30      # Run inference every N frames
 CONF_THRESHOLD = 0.7            # Confidence threshold for predictions
-SAMPLE_RATE = 1000              # Sample rate of ADC data for spectrogram
-BUFFER_SIZE = 2048
 PLOT_X_LENGTH = 1024*100       
 AUDIO_SAMPLES = 1024*200         # ~ 13 seconds worth of data
 
@@ -557,10 +555,6 @@ class GUI:
         self.graph_frame = tk.Frame(self.left_frame, bg='#2C3E50')
         self.graph_frame.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
 
-        # Bottom Right: Spectrogram
-        self.spec_frame = tk.Frame(self.right_frame, bg='#2C3E50', height=250)
-        self.spec_frame.pack(side=tk.BOTTOM, fill=tk.X, expand=False)
-
         # Voltage Graph Setup
         self.fig, self.ax = plt.subplots(figsize=(6, 3))
         self.fig.patch.set_facecolor('#2C3E50')
@@ -576,15 +570,6 @@ class GUI:
         self.line, = self.ax.plot([], [], 'r-', linewidth=2)
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.graph_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        
-        # Spectogram setup
-        self.fig_spec, self.ax_spec = plt.subplots(figsize=(6, 3))
-        self.ax_spec.set_title("Spectrogram")
-        self.ax_spec.set_xlabel("Time [s]")
-        self.ax_spec.set_ylabel("Frequency [Hz]")
-        self.spectogram_queue = []
-        self.canvas_spec = FigureCanvasTkAgg(self.fig_spec, master=self.spec_frame)
-        self.canvas_spec.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
         # Voltage update counter
         self.voltage_update_counter = 0
@@ -733,10 +718,6 @@ class GUI:
                     # Update status with latest voltage
                     latest_voltage = self.adc_receiver.get_latest_voltage()
                     self.adc_status_label.config(text=f"ADC: {latest_voltage:.3f}V (UDP)")
-                    
-                    # Update spectrogram
-                    # Pxx, freqs, bins, im = self.ax_spec.specgram(self.y_data, NFFT=1024, Fs=SAMPLE_RATE, noverlap=512, cmap="viridis")
-                    # self.canvas_spec.draw()
 
                     # Update plot
                     if len(self.x_data) > 0:
