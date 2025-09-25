@@ -27,7 +27,7 @@ try:
         label_encoder = pickle.load(f)
     
     # Load trained classifier
-    audio_classifier = load_model("yamnet_audio_classifier.h5")
+    audio_classifier = load_model("yamnet_audio_classifier_old.h5")
     
     # Load YAMNet
     yamnet_model = hub.load("https://tfhub.dev/google/yamnet/1")
@@ -47,7 +47,7 @@ frame_buffer = None  # Buffer for frame reuse
 # Params
 INFERENCE_SKIP_FRAMES = 30      # Run inference every N frames
 CONF_THRESHOLD = 0.7            # Confidence threshold for predictions
-PLOT_X_LENGTH = 1024*100       
+PLOT_X_LENGTH = 10000      
 AUDIO_SAMPLES = 1024*200         # ~ 13 seconds worth of data
 
 # Audio classification params
@@ -310,9 +310,12 @@ class AudioClassificationWorker(threading.Thread):
                                 self.result_queue.put_nowait(result)
                             except queue.Full:
                                 pass
-                            
+                            #print(result)
                             print(f"Audio classification: {predicted_class} (confidence: {confidence:.3f})")
                     
+                    # Clear ADC data after classification
+                    #self.adc_receiver.clear_voltage_data()
+
                     self.last_classification_time = current_time
                 
                 # Sleep to prevent excessive CPU usage
@@ -357,6 +360,14 @@ class ADCReceiver(threading.Thread):
         except queue.Empty:
             pass
         return data
+    
+    def clear_voltage_data(self):
+        """Clear all queued voltage data"""
+        try:
+            while True:
+                self.data_queue.get_nowait()
+        except queue.Empty:
+            pass
     
     def run(self):
         while self.running:
@@ -576,7 +587,7 @@ class GUI:
         self.ax.tick_params(colors='white')
         self.x_data = []
         self.y_data = []
-        self.time_window = 5  
+        self.time_window = 3  
         self.line, = self.ax.plot([], [], 'r-', linewidth=2)
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.graph_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
@@ -773,18 +784,12 @@ class GUI:
                         _, predictions = result
                         self.update_detection_list(predictions)
                 
-                # Check for audio classification results
-                if self.audio_classification_worker is not None:
-                    audio_result = self.audio_classification_worker.get_result()
-                    if audio_result is not None:
-                        self.update_audio_detection_list(audio_result)
-                    
-                    # Use last result or original frame
-                    if self.last_inference_result is not None:
-                        processed_frame, _ = self.last_inference_result
-                    else:
-                        processed_frame = frame
-                
+                # Use last result or original frame
+                if self.last_inference_result is not None:
+                    processed_frame, _ = self.last_inference_result
+                else:
+                    processed_frame = frame
+
                 # Resize for display if too large
                 display_frame = self.resize_for_display(processed_frame)
                 
@@ -794,28 +799,38 @@ class GUI:
                 imgtk = ImageTk.PhotoImage(image=img)
                 self.video_label.imgtk = imgtk
                 self.video_label.configure(image=imgtk)
-
-                if self.recording:
-                    if self.video_out is None:
-                        # Define the codec and create VideoWriter object
-                        h, w = frame.shape[:2]
-                        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # MP4 codec
-                        self.video_out = cv2.VideoWriter(self.video_filename, fourcc, 20.0, (w, h))
-                    
-                        if not self.video_out.isOpened():
-                            print("Failed to initialize VideoWriter")
-                            self.video_out = None
                 
-                    # Record frames
-                    if self.video_out is not None:
-                        self.video_out.write(display_frame)
-
                 # Update counters
                 self.frame_counter_label.config(text=f"Frames: {self.frame_count}")
                 self.calculate_fps()
                 
             except Exception as e:
                 print(f"Frame processing error: {e}")
+
+        # Check for audio classification results
+        #if self.audio_classification_worker is not None:
+        audio_result = self.audio_classification_worker.get_result()
+
+        if audio_result is not None:
+            self.update_audio_detection_list(audio_result)
+            #print(audio_result)
+        
+
+
+        if self.recording:
+            if self.video_out is None:
+                # Define the codec and create VideoWriter object
+                h, w = frame.shape[:2]
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # MP4 codec
+                self.video_out = cv2.VideoWriter(self.video_filename, fourcc, 20.0, (w, h))
+            
+                if not self.video_out.isOpened():
+                    print("Failed to initialize VideoWriter")
+                    self.video_out = None
+        
+            # Record frames
+            if self.video_out is not None:
+                self.video_out.write(display_frame)
 
         # Update voltage plot (less frequently to reduce overhead)
         self.voltage_update_counter += 1
@@ -946,24 +961,24 @@ class GUI:
         # Only add if this audio class hasn't been detected recently (within last 30 seconds)
         current_timestamp = time.time()
         recent_audio_detections = [d for d in self.detection_list 
-                                 if d.get('type') == 'audio' and 
-                                 (current_timestamp - d.get('timestamp', 0)) < 30]
+                                if d.get('type') == 'audio' and 
+                                (current_timestamp - d.get('timestamp', 0)) < 30]
         
         if not any(d['animal'].lower() == predicted_class for d in recent_audio_detections):
             self.detection_counter += 1
             
             # Create detection entry
             detection_frame = tk.Frame(self.detection_scrollable_frame, bg='#8E44AD', 
-                                     relief=tk.RAISED, bd=1)
+                                        relief=tk.RAISED, bd=1)
             detection_frame.pack(fill=tk.X, padx=5, pady=2)
             
             # Detection info
-            info_text = f"#{self.detection_counter}: {audio_result['class']} (Audio)\nConfidence: {confidence:.2f}\nTime: {current_time}"
+            info_text = f"#{self.detection_counter}: {predicted_class} (Audio)\nConfidence: {confidence:.2f}\nTime: {current_time}"
             detection_label = tk.Label(detection_frame, text=info_text, 
-                                     bg='#8E44AD', fg='white', font=("Arial", 9),
-                                     justify=tk.LEFT)
+                                        bg='#8E44AD', fg='white', font=("Arial", 9),
+                                        justify=tk.LEFT)
             detection_label.pack(padx=5, pady=3)
-            
+        
             # Store detection info
             self.detection_list.append({
                 'frame': detection_frame,
@@ -973,10 +988,10 @@ class GUI:
                 'type': 'audio',
                 'timestamp': current_timestamp
             })
-            
-            # Auto-scroll to bottom
-            self.detection_canvas.update_idletasks()
-            self.detection_canvas.yview_moveto(1.0)
+        
+        # Auto-scroll to bottom
+        self.detection_canvas.update_idletasks()
+        self.detection_canvas.yview_moveto(1.0)
     
     def clear_detection_list(self):
         """Clear all detections from the list"""
