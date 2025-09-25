@@ -34,12 +34,12 @@ stream = p.open(format=FORMAT,
 # -------------------------
 # Camera Setup
 # -------------------------
-picam2 = Picamera2()
-config = picam2.create_video_configuration(
-    main={"size": (320, 240)},
-)
-picam2.configure(config)
-picam2.start()
+#picam2 = Picamera2()
+#config = picam2.create_video_configuration(
+#    main={"size": (320, 240)},
+#)
+#picam2.configure(config)
+#picam2.start()
 
 print(f"Sending video to {UDP_IP}:{UDP_PORT_VIDEO}")
 print(f"Sending audio JSON to {UDP_IP}:{UDP_PORT_AUDIO}")
@@ -47,10 +47,10 @@ print(f"Sending audio JSON to {UDP_IP}:{UDP_PORT_AUDIO}")
 try:
     while True:
         # --- Capture and send video ---
-        frame = picam2.capture_array()
-        ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 30])
-        if ret:
-            sock_video.sendto(buffer.tobytes(), (UDP_IP, UDP_PORT_VIDEO))
+        #frame = picam2.capture_array()
+        #ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 30])
+        #if ret:
+         #   sock_video.sendto(buffer.tobytes(), (UDP_IP, UDP_PORT_VIDEO))
 
         # --- Capture and send audio as JSON ---
         audio_data = stream.read(CHUNK, exception_on_overflow=False) #1024 samples at 16khz is not about 64ms of audio- not long enough for detection
@@ -74,7 +74,7 @@ except KeyboardInterrupt:
     print("\nStopping...")
 
 finally:
-    picam2.stop()
+    #picam2.stop()
     cv2.destroyAllWindows()
     sock_video.close()
     sock_audio.close()
