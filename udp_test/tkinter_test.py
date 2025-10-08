@@ -9,12 +9,43 @@ import threading
 import queue
 import time
 import json
-from inference import get_model
 from ultralytics import YOLO
+import tensorflow as tf
+import tensorflow_hub as hub
+from tensorflow.keras.models import load_model
+import pickle
+import wave
+import torch
+import torch.nn as nn
+import librosa
+from panns_inference import AudioTagging
 
 # Load model
 # model = YOLO("models/runs/train/my_model/weights/best.pt")
 model = YOLO("Model_HL_16-09.pt")
+
+# Load audio classification models
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print("Using device:", device)
+
+try:
+    # Load label encoder
+    with open("label_encoder.pkl", "rb") as f:
+        label_encoder = pickle.load(f)
+
+    # Load trained classifier (PyTorch)
+    audio_classifier_model = torch.load("mlp_classifier_full.pth", map_location=device)
+    model.eval()
+
+    # Load pretrained PANNs feature extractor
+    pann_model = AudioTagging(device=device)
+
+    print("✅ Audio classification models loaded successfully.")
+except Exception as e:
+    print(f"Error loading models: {e}")
+    label_encoder = None
+    audio_classifier_model = None
+    pann_model = None
 
 # Global variables
 frame_skip_counter = 0
@@ -22,11 +53,19 @@ last_predictions = []  # Cache last predictions
 frame_buffer = None  # Buffer for frame reuse
 
 # Params
-INFERENCE_SKIP_FRAMES = 30  # Run inference every N frames
-CONF_THRESHOLD = 0.7 # Confidence threshold for predictions
-SAMPLE_RATE = 1000 # Sample rate of ADC data for spectrogram
-BUFFER_SIZE = 2048
-PLOT_X_LENGTH = 1024*10
+INFERENCE_SKIP_FRAMES = 30      # Run inference every N frames
+CONF_THRESHOLD = 0.7            # Confidence threshold for predictions
+PLOT_X_LENGTH = 10000      
+AUDIO_SAMPLES = 1024*200         # ~ 13 seconds worth of data
+
+# Audio classification params
+AUDIO_CLASSIFICATION_INTERVAL = 5.0     # Run audio classification every N seconds
+AUDIO_CLASSIFICATION_CONFIDENCE = 0.5   # Minimum confidence for audio predictions
+PANN_SAMPLE_RATE = 32000              # PANN expects 32kHz audio
+
+# Audio recording params
+AUDIO_SAMPLE_RATE = 32000               # Audio recording sample rate
+AUDIO_CHUNK_SIZE = 32000                # Save audio in 1-second chunks
 
 
 # -------------------------
@@ -168,6 +207,132 @@ class InferenceWorker(threading.Thread):
         self.running = False
 
 # -------------------------
+# Audio Classification Functions
+# -------------------------
+def extract_embedding(waveform):
+    """Extract PANNs CNN14 embedding"""
+    if pann_model is None:
+        return None
+    
+    try:
+        audio_tensor = torch.tensor(waveform[None, :], dtype=torch.float32).to(device)
+        with torch.no_grad():
+            _, embedding = pann_model.inference(audio_tensor)
+        if isinstance(embedding, torch.Tensor):
+            embedding = embedding.cpu().numpy().squeeze()
+        else:
+            embedding = np.array(embedding).squeeze()
+        return embedding
+    except Exception as e:
+        print(f"Embedding extraction failed: {e}")
+        return None
+
+def classify_audio(audio_data):
+    """Classify audio data using the trained model"""
+    if audio_classifier_model is None or label_encoder is None:
+        return None, 0.0
+    
+    try:
+        # Convert list of dicts or floats to numpy array
+        if isinstance(audio_data[0], dict) and "voltage" in audio_data[0]:
+            audio_np = np.array([v["voltage"] for v in audio_data], dtype=np.float32)
+        else:
+            audio_np = np.array(audio_data, dtype=np.float32)
+
+        # Extract embedding
+        emb = extract_embedding(audio_np)
+        if emb is None:
+            return None, 0.0
+
+        # Classify
+        emb_tensor = torch.tensor(emb, dtype=torch.float32).unsqueeze(0).to(device)
+        with torch.no_grad():
+            logits = model(emb_tensor)
+            probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
+
+        pred_idx = np.argmax(probs)
+        pred_class = label_encoder.inverse_transform([pred_idx])[0]
+        confidence = float(probs[pred_idx])
+
+        return pred_class, confidence
+
+    except Exception as e:
+        print(f"⚠️ Classification error: {e}")
+        return None, 0.0
+
+# -------------------------
+# Audio Classification Worker Thread
+# -------------------------
+class AudioClassificationWorker(threading.Thread):
+    def __init__(self, adc_receiver):
+        super().__init__(daemon=True)
+        self.adc_receiver = adc_receiver
+        self.running = True
+        self.last_classification_time = 0
+        self.result_queue = queue.Queue(maxsize=5)
+        
+    def get_result(self):
+        """Get latest audio classification result"""
+        try:
+            return self.result_queue.get_nowait()
+        except queue.Empty:
+            return None
+    
+    def run(self):
+        while self.running:
+            try:
+                current_time = time.time()
+                
+                # Check if it's time for classification
+                if current_time - self.last_classification_time >= AUDIO_CLASSIFICATION_INTERVAL:
+                    # Get audio data from ADC receiver
+                    audio_data = self.adc_receiver.get_voltage_data()
+                    
+                    if len(audio_data) > 0:
+                        # Extract voltage values for classification
+                        voltage_values = [entry['voltage'] for entry in audio_data]
+                        
+                        # Classify audio
+                        predicted_class, confidence = classify_audio(voltage_values)
+                        
+                        if predicted_class is not None and confidence >= AUDIO_CLASSIFICATION_CONFIDENCE:
+                            # Add result to queue
+                            result = {
+                                'class': predicted_class,
+                                'confidence': confidence,
+                                'timestamp': current_time
+                            }
+                            
+                            # Keep only latest results
+                            try:
+                                while not self.result_queue.empty():
+                                    self.result_queue.get_nowait()
+                            except queue.Empty:
+                                pass
+                            
+                            try:
+                                self.result_queue.put_nowait(result)
+                            except queue.Full:
+                                pass
+                            #print(result)
+                            print(f"Audio classification: {predicted_class} (confidence: {confidence:.3f})")
+                    
+                    # Clear ADC data after classification
+                    #self.adc_receiver.clear_voltage_data()
+
+                    self.last_classification_time = current_time
+                
+                # Sleep to prevent excessive CPU usage
+                time.sleep(0.1)
+                
+            except Exception as e:
+                print(f"Audio classification error: {e}")
+                time.sleep(1.0)
+    
+    def stop(self):
+        self.running = False
+
+# -------------------------
 # ADC Data Receiver Thread
 # -------------------------
 class ADCReceiver(threading.Thread):
@@ -176,7 +341,7 @@ class ADCReceiver(threading.Thread):
         self.udp_port = udp_port
         self.running = True
         self.latest_voltage = 0.0
-        self.data_queue = queue.Queue(maxsize=1024*5)
+        self.data_queue = queue.Queue(maxsize=AUDIO_SAMPLES)
         
         # Setup UDP socket for ADC data
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -199,6 +364,14 @@ class ADCReceiver(threading.Thread):
         except queue.Empty:
             pass
         return data
+    
+    def clear_voltage_data(self):
+        """Clear all queued voltage data"""
+        try:
+            while True:
+                self.data_queue.get_nowait()
+        except queue.Empty:
+            pass
     
     def run(self):
         while self.running:
@@ -313,6 +486,15 @@ class GUI:
         self.inference_worker.start()
         self.last_inference_result = None
         
+        # Threading for audio classification (only if models loaded successfully)
+        if audio_classifier_model is not None and label_encoder is not None and pann_model is not None:
+            self.audio_classification_worker = AudioClassificationWorker(self.adc_receiver)
+            self.audio_classification_worker.start()
+            print("Audio classification thread started")
+        else:
+            self.audio_classification_worker = None
+            print("Audio classification disabled - models not loaded")
+        
         # Main layout: Left side for video and graph, right side reserved
         self.left_frame = tk.Frame(root, bg='#2C3E50')
         self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=10, pady=10)
@@ -379,6 +561,11 @@ class GUI:
         self.adc_status_label = tk.Label(self.video_frame, text="ADC: Waiting...", 
                                        font=("Arial", 10), fg="green")
         self.adc_status_label.pack()
+        
+        # Recording status label
+        self.recording_status_label = tk.Label(self.video_frame, text="Recording: Ready", 
+                                             font=("Arial", 10), fg="orange")
+        self.recording_status_label.pack()
 
         # Video display with proper sizing
         self.video_label = tk.Label(self.video_frame, bg="black")
@@ -393,10 +580,6 @@ class GUI:
         self.graph_frame = tk.Frame(self.left_frame, bg='#2C3E50')
         self.graph_frame.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
 
-        # Bottom Right: Spectrogram
-        self.spec_frame = tk.Frame(self.right_frame, bg='#2C3E50', height=250)
-        self.spec_frame.pack(side=tk.BOTTOM, fill=tk.X, expand=False)
-
         # Voltage Graph Setup
         self.fig, self.ax = plt.subplots(figsize=(6, 3))
         self.fig.patch.set_facecolor('#2C3E50')
@@ -408,19 +591,10 @@ class GUI:
         self.ax.tick_params(colors='white')
         self.x_data = []
         self.y_data = []
-        self.time_window = 5  
+        self.time_window = 3  
         self.line, = self.ax.plot([], [], 'r-', linewidth=2)
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.graph_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        
-        # Spectogram setup
-        self.fig_spec, self.ax_spec = plt.subplots(figsize=(6, 3))
-        self.ax_spec.set_title("Spectrogram")
-        self.ax_spec.set_xlabel("Time [s]")
-        self.ax_spec.set_ylabel("Frequency [Hz]")
-        self.spectogram_queue = []
-        self.canvas_spec = FigureCanvasTkAgg(self.fig_spec, master=self.spec_frame)
-        self.canvas_spec.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
         # Voltage update counter
         self.voltage_update_counter = 0
@@ -429,7 +603,14 @@ class GUI:
         # Setup VideoWriter
         self.video_out = None
         self.recording = False
-        self.video_filename = "output.mp4"
+        self.video_filename = None
+        self.audio_filename = None
+        
+        # Setup Audio Recording
+        self.audio_out = None
+        self.audio_data_buffer = []
+        self.audio_start_time = None
+        self.audio_chunk_count = 0
 
         # Recording button
         self.record_button = tk.Button(root, text="Start Recording", command=self.toggle_recording)
@@ -437,20 +618,127 @@ class GUI:
 
         self.update()  # start loop
 
+    def generate_recording_filenames(self):
+        """Generate timestamped filenames for video and audio recordings"""
+        from datetime import datetime
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.video_filename = f"recording_video_{timestamp}.mp4"
+        self.audio_filename = f"recording_audio_{timestamp}.wav"
+        
+        print(f"Recording filenames generated:")
+        print(f"  Video: {self.video_filename}")
+        print(f"  Audio: {self.audio_filename}")
+
     def toggle_recording(self):
         if not self.recording:
+            # Generate timestamped filenames
+            self.generate_recording_filenames()
+            
             # Start recording
             self.recording = True
             self.record_button.config(text="Stop Recording")
-            print("Recording started")
+            self.audio_start_time = time.time()
+            self.audio_data_buffer = []
+            self.audio_chunk_count = 0
+            
+            # Initialize audio file for streaming
+            self.init_audio_file()
+            
+            # Update status label
+            self.recording_status_label.config(text=f"Recording: {self.video_filename}", fg="red")
+            
+            print("Recording started (video + audio)")
         else:
             # Stop recording
             self.recording = False
             self.record_button.config(text="Start Recording")
+            
+            # Stop video recording
             if self.video_out is not None:
                 self.video_out.release()
                 self.video_out = None
+            
+            # Finalize audio recording
+            self.finalize_audio_recording()
+            
+            # Update status label
+            self.recording_status_label.config(text="Recording: Ready", fg="orange")
+            
             print("Recording stopped")
+    
+    def init_audio_file(self):
+        """Initialize the audio file for streaming recording"""
+        try:
+            self.audio_out = wave.open(self.audio_filename, 'w')
+            self.audio_out.setnchannels(1)  # Mono
+            self.audio_out.setsampwidth(2)  # 2 bytes per sample (16-bit)
+            self.audio_out.setframerate(AUDIO_SAMPLE_RATE)
+            print(f"Audio file initialized: {self.audio_filename}")
+        except Exception as e:
+            print(f"Error initializing audio file: {e}")
+            self.audio_out = None
+    
+    def write_audio_chunk(self):
+        """Write accumulated audio data to file in chunks"""
+        if self.audio_out is not None and len(self.audio_data_buffer) >= AUDIO_CHUNK_SIZE:
+            try:
+                # Get chunk of data
+                chunk_data = self.audio_data_buffer[:AUDIO_CHUNK_SIZE]
+                self.audio_data_buffer = self.audio_data_buffer[AUDIO_CHUNK_SIZE:]
+                
+                # Convert to audio samples
+                audio_data = np.array(chunk_data, dtype=np.float32)
+                
+                # Normalize to [-1, 1] range
+                if np.max(np.abs(audio_data)) > 0:
+                    audio_data = audio_data / np.max(np.abs(audio_data))
+                
+                # Convert to 16-bit integers
+                audio_data = (audio_data * 32767).astype(np.int16)
+                
+                # Write to file
+                self.audio_out.writeframes(audio_data.tobytes())
+                self.audio_chunk_count += 1
+                
+                if self.audio_chunk_count % 10 == 0:  # Print every 10 seconds
+                    print(f"Audio: {self.audio_chunk_count} seconds recorded")
+                    
+            except Exception as e:
+                print(f"Error writing audio chunk: {e}")
+    
+    def finalize_audio_recording(self):
+        """Finalize the audio recording and close the file"""
+        try:
+            # Write any remaining data
+            if len(self.audio_data_buffer) > 0:
+                audio_data = np.array(self.audio_data_buffer, dtype=np.float32)
+                
+                # Normalize to [-1, 1] range
+                if np.max(np.abs(audio_data)) > 0:
+                    audio_data = audio_data / np.max(np.abs(audio_data))
+                
+                # Convert to 16-bit integers
+                audio_data = (audio_data * 32767).astype(np.int16)
+                
+                # Write remaining data
+                if self.audio_out is not None:
+                    self.audio_out.writeframes(audio_data.tobytes())
+            
+            # Close the file
+            if self.audio_out is not None:
+                self.audio_out.close()
+                self.audio_out = None
+                
+            total_samples = (self.audio_chunk_count * AUDIO_CHUNK_SIZE) + len(self.audio_data_buffer)
+            duration = total_samples / AUDIO_SAMPLE_RATE
+            print(f"Audio recording completed: {self.audio_filename} ({duration:.1f} seconds)")
+            
+        except Exception as e:
+            print(f"Error finalizing audio recording: {e}")
+        finally:
+            self.audio_data_buffer = []
+            self.audio_chunk_count = 0
     
     def calculate_fps(self):
         """Calculate and update FPS display"""
@@ -499,13 +787,13 @@ class GUI:
                         # Update detection list with new predictions
                         _, predictions = result
                         self.update_detection_list(predictions)
-                    
-                    # Use last result or original frame
-                    if self.last_inference_result is not None:
-                        processed_frame, _ = self.last_inference_result
-                    else:
-                        processed_frame = frame
                 
+                # Use last result or original frame
+                if self.last_inference_result is not None:
+                    processed_frame, _ = self.last_inference_result
+                else:
+                    processed_frame = frame
+
                 # Resize for display if too large
                 display_frame = self.resize_for_display(processed_frame)
                 
@@ -515,28 +803,38 @@ class GUI:
                 imgtk = ImageTk.PhotoImage(image=img)
                 self.video_label.imgtk = imgtk
                 self.video_label.configure(image=imgtk)
-
-                if self.recording:
-                    if self.video_out is None:
-                        # Define the codec and create VideoWriter object
-                        h, w = frame.shape[:2]
-                        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # MP4 codec
-                        self.video_out = cv2.VideoWriter(self.video_filename, fourcc, 20.0, (w, h))
-                    
-                        if not self.video_out.isOpened():
-                            print("Failed to initialize VideoWriter")
-                            self.video_out = None
                 
-                    # Record frames
-                    if self.video_out is not None:
-                        self.video_out.write(display_frame)
-
                 # Update counters
                 self.frame_counter_label.config(text=f"Frames: {self.frame_count}")
                 self.calculate_fps()
                 
             except Exception as e:
                 print(f"Frame processing error: {e}")
+
+        # Check for audio classification results
+        #if self.audio_classification_worker is not None:
+        audio_result = self.audio_classification_worker.get_result()
+
+        if audio_result is not None:
+            self.update_audio_detection_list(audio_result)
+            #print(audio_result)
+        
+
+
+        if self.recording:
+            if self.video_out is None:
+                # Define the codec and create VideoWriter object
+                h, w = frame.shape[:2]
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # MP4 codec
+                self.video_out = cv2.VideoWriter(self.video_filename, fourcc, 20.0, (w, h))
+            
+                if not self.video_out.isOpened():
+                    print("Failed to initialize VideoWriter")
+                    self.video_out = None
+        
+            # Record frames
+            if self.video_out is not None:
+                self.video_out.write(display_frame)
 
         # Update voltage plot (less frequently to reduce overhead)
         self.voltage_update_counter += 1
@@ -551,6 +849,12 @@ class GUI:
                     for voltage_data in voltage_data_list:
                         voltage = voltage_data['voltage']
                         
+                        # Add to audio recording buffer if recording
+                        if self.recording:
+                            self.audio_data_buffer.append(voltage)
+                            # Write audio chunks periodically to prevent memory buildup
+                            self.write_audio_chunk()
+                        
                         # Add to plot data
                         current_time = time.time() - self.plot_time_offset
                         if len(self.x_data) >= PLOT_X_LENGTH:
@@ -563,10 +867,6 @@ class GUI:
                     # Update status with latest voltage
                     latest_voltage = self.adc_receiver.get_latest_voltage()
                     self.adc_status_label.config(text=f"ADC: {latest_voltage:.3f}V (UDP)")
-                    
-                    # Update spectrogram
-                    # Pxx, freqs, bins, im = self.ax_spec.specgram(self.y_data, NFFT=1024, Fs=SAMPLE_RATE, noverlap=512, cmap="viridis")
-                    # self.canvas_spec.draw()
 
                     # Update plot
                     if len(self.x_data) > 0:
@@ -654,6 +954,49 @@ class GUI:
                     self.detection_canvas.update_idletasks()
                     self.detection_canvas.yview_moveto(1.0)
     
+    def update_audio_detection_list(self, audio_result):
+        """Update the detection list with audio classification results"""
+        import datetime
+        
+        current_time = datetime.datetime.now().strftime("%H:%M:%S")
+        predicted_class = audio_result['class'].lower()
+        confidence = audio_result['confidence']
+        
+        # Only add if this audio class hasn't been detected recently (within last 30 seconds)
+        current_timestamp = time.time()
+        recent_audio_detections = [d for d in self.detection_list 
+                                if d.get('type') == 'audio' and 
+                                (current_timestamp - d.get('timestamp', 0)) < 30]
+        
+        if not any(d['animal'].lower() == predicted_class for d in recent_audio_detections):
+            self.detection_counter += 1
+            
+            # Create detection entry
+            detection_frame = tk.Frame(self.detection_scrollable_frame, bg='#8E44AD', 
+                                        relief=tk.RAISED, bd=1)
+            detection_frame.pack(fill=tk.X, padx=5, pady=2)
+            
+            # Detection info
+            info_text = f"#{self.detection_counter}: {predicted_class} (Audio)\nConfidence: {confidence:.2f}\nTime: {current_time}"
+            detection_label = tk.Label(detection_frame, text=info_text, 
+                                        bg='#8E44AD', fg='white', font=("Arial", 9),
+                                        justify=tk.LEFT)
+            detection_label.pack(padx=5, pady=3)
+        
+            # Store detection info
+            self.detection_list.append({
+                'frame': detection_frame,
+                'animal': audio_result['class'],
+                'confidence': confidence,
+                'time': current_time,
+                'type': 'audio',
+                'timestamp': current_timestamp
+            })
+        
+        # Auto-scroll to bottom
+        self.detection_canvas.update_idletasks()
+        self.detection_canvas.yview_moveto(1.0)
+    
     def clear_detection_list(self):
         """Clear all detections from the list"""
         for detection in self.detection_list:
@@ -664,6 +1007,8 @@ class GUI:
     def __del__(self):
         if hasattr(self, 'inference_worker'):
             self.inference_worker.stop()
+        if hasattr(self, 'audio_classification_worker'):
+            self.audio_classification_worker.stop()
         if hasattr(self, 'adc_receiver'):
             self.adc_receiver.stop()
         if hasattr(self, 'video_sock'):
@@ -672,6 +1017,9 @@ class GUI:
             self.video_receiver.stop()
         if self.video_out is not None:
             self.video_out.release()
+        # Save any remaining audio data
+        if hasattr(self, 'recording') and self.recording:
+            self.finalize_audio_recording()
 
 # -------------------------
 # Run
@@ -687,6 +1035,8 @@ if __name__ == "__main__":
     finally:
         if hasattr(app, 'inference_worker'):
             app.inference_worker.stop()
+        if hasattr(app, 'audio_classification_worker'):
+            app.audio_classification_worker.stop()
         if hasattr(app, 'adc_receiver'):
             app.adc_receiver.stop()
         if hasattr(app, 'video_sock'):
