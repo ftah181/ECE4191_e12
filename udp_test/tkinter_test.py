@@ -24,18 +24,35 @@ from panns_inference import AudioTagging
 # model = YOLO("models/runs/train/my_model/weights/best.pt")
 model = YOLO("Model_HL_16-09.pt")
 
+
+# --------------------
+# Define same MLP model
+# --------------------
+class MLPClassifier(nn.Module):
+    def __init__(self, input_dim=2048, hidden_dim=512, num_classes=15):
+        super().__init__()
+        self.model = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(hidden_dim, num_classes)
+        )
+    def forward(self, x):
+        return self.model(x)
+
+
 # Load audio classification models
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print("Using device:", device)
 
 try:
     # Load label encoder
-    with open("label_encoder.pkl", "rb") as f:
+    with open("label_encoder_null.pkl", "rb") as f:
         label_encoder = pickle.load(f)
 
     # Load trained classifier (PyTorch)
     audio_classifier_model = torch.load("mlp_classifier_full.pth", map_location=device)
-    model.eval()
+    audio_classifier_model.eval()
 
     # Load pretrained PANNs feature extractor
     pann_model = AudioTagging(device=device)
@@ -59,7 +76,7 @@ PLOT_X_LENGTH = 10000
 AUDIO_SAMPLES = 1024*200         # ~ 13 seconds worth of data
 
 # Audio classification params
-AUDIO_CLASSIFICATION_INTERVAL = 5.0     # Run audio classification every N seconds
+AUDIO_CLASSIFICATION_INTERVAL = 10.0     # Run audio classification every N seconds
 AUDIO_CLASSIFICATION_CONFIDENCE = 0.5   # Minimum confidence for audio predictions
 PANN_SAMPLE_RATE = 32000              # PANN expects 32kHz audio
 
@@ -247,7 +264,7 @@ def classify_audio(audio_data):
         # Classify
         emb_tensor = torch.tensor(emb, dtype=torch.float32).unsqueeze(0).to(device)
         with torch.no_grad():
-            logits = model(emb_tensor)
+            logits = audio_classifier_model(emb_tensor)
             probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
 
         pred_idx = np.argmax(probs)
@@ -257,7 +274,7 @@ def classify_audio(audio_data):
         return pred_class, confidence
 
     except Exception as e:
-        print(f"⚠️ Classification error: {e}")
+        print(f"Classification error: {e}")
         return None, 0.0
 
 # -------------------------
