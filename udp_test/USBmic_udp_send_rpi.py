@@ -16,7 +16,7 @@ UDP_PORT_AUDIO = 5006   # Port for audio JSON
 CHUNK = 1024            # Number of audio samples per chunk
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
-RATE = 16000
+RATE = 32000
 
 sock_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock_audio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
