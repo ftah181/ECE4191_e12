@@ -1,13 +1,14 @@
-from ultralytics import YOLO
+import tensorflow as tf
+import tensorflow_hub as hub
 
-# Load pretrained model
-model = YOLO("models/runs/train/my_model/weights/best.pt")
+# Download manually (only needs to be done once with internet):
+hub_model_url = "https://tfhub.dev/google/yamnet/1"
+local_model_path = "./yamnet_model"  # folder to store
 
-# Inference
-results = model("img.jpg")   # run detection on an image
+# This will download and save it locally
+yamnet_model = hub.load(hub_model_url)
+tf.saved_model.save(yamnet_model, local_model_path)
 
-# Access the first result
-res = results[0]
+# Later, even offline, you can load from disk:
+yamnet_model = hub.load(local_model_path)
 
-# Show the detections
-res.show()

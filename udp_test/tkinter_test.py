@@ -19,6 +19,7 @@ import wave
 # Load model
 # model = YOLO("models/runs/train/my_model/weights/best.pt")
 model = YOLO("Model_HL_16-09.pt")
+audio_model_path = "./yamnet_model"
 
 # Load audio classification models
 try:
@@ -27,10 +28,10 @@ try:
         label_encoder = pickle.load(f)
     
     # Load trained classifier
-    audio_classifier = load_model("yamnet_audio_classifier_old.h5")
+    audio_classifier = load_model("yamnet_audio_classifier.h5")
     
     # Load YAMNet
-    yamnet_model = hub.load("https://tfhub.dev/google/yamnet/1")
+    yamnet_model = hub.load(audio_model_path)
     
     print("Audio classification models loaded successfully")
 except Exception as e:
@@ -48,11 +49,11 @@ frame_buffer = None  # Buffer for frame reuse
 INFERENCE_SKIP_FRAMES = 30      # Run inference every N frames
 CONF_THRESHOLD = 0.7            # Confidence threshold for predictions
 PLOT_X_LENGTH = 10000      
-AUDIO_SAMPLES = 1024*200         # ~ 13 seconds worth of data
+AUDIO_SAMPLES = 1024*200        # ~ 13 seconds worth of data
 
 # Audio classification params
-AUDIO_CLASSIFICATION_INTERVAL = 5.0     # Run audio classification every N seconds
-AUDIO_CLASSIFICATION_CONFIDENCE = 0.5   # Minimum confidence for audio predictions
+AUDIO_CLASSIFICATION_INTERVAL = 20      # Run audio classification every N seconds
+AUDIO_CLASSIFICATION_CONFIDENCE = 0.7   # Minimum confidence for audio predictions
 YAMNET_SAMPLE_RATE = 16000              # YAMNet expects 16kHz audio
 
 # Audio recording params
@@ -314,7 +315,7 @@ class AudioClassificationWorker(threading.Thread):
                             print(f"Audio classification: {predicted_class} (confidence: {confidence:.3f})")
                     
                     # Clear ADC data after classification
-                    #self.adc_receiver.clear_voltage_data()
+                    self.adc_receiver.clear_voltage_data()
 
                     self.last_classification_time = current_time
                 
@@ -580,14 +581,14 @@ class GUI:
         self.fig, self.ax = plt.subplots(figsize=(6, 3))
         self.fig.patch.set_facecolor('#2C3E50')
         self.ax.set_facecolor('#34495E')
-        self.ax.set_ylim(-0.01, 0.01)
+        self.ax.set_ylim(-0.03, 0.03)
         self.ax.set_title("Microphone Data", color='white')
         self.ax.set_xlabel("Time", color='white')
         self.ax.set_ylabel("Magnitude", color='white')
         self.ax.tick_params(colors='white')
         self.x_data = []
         self.y_data = []
-        self.time_window = 3  
+        self.time_window = 2  
         self.line, = self.ax.plot([], [], 'r-', linewidth=2)
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.graph_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
@@ -834,7 +835,7 @@ class GUI:
 
         # Update voltage plot (less frequently to reduce overhead)
         self.voltage_update_counter += 1
-        if self.voltage_update_counter >= 10:  # Reduced frequency for better performance
+        if self.voltage_update_counter >= 50:  # Reduced frequency for better performance
             self.voltage_update_counter = 0
             try:
                 # Get voltage data from ADC receiver
