@@ -48,7 +48,7 @@ try:
     audio_classifier_model = torch.load("mlp_classifier_full.pth", map_location=device, weights_only=False)
     audio_classifier_model.eval()
     pann_model = AudioTagging(device=device)
-    print("✅ Audio classification models loaded successfully.")
+    print("Audio classification models loaded successfully.")
 except Exception as e:
     print(f"Error loading models: {e}")
     label_encoder = None
@@ -124,7 +124,7 @@ class ADCReceiver(threading.Thread):
         try:
             self.sock.bind(("0.0.0.0", udp_port))
             self.sock.settimeout(1)
-            print(f"✅ ADC UDP socket bound to port {udp_port}")
+            print(f"ADC UDP socket bound to port {udp_port}")
         except Exception as e:
             print(f"ADC socket binding error: {e}")
 
@@ -188,7 +188,7 @@ class AudioClassificationWorker(threading.Thread):
         self.result_queue = queue.Queue(maxsize=5)
         self.audio_buffer = []  # persistent rolling buffer
         self.last_pred_time = 0
-        self.PRED_INTERVAL = 25  # run classification every 25 s max
+        self.PRED_INTERVAL = 15  # run classification every 15 s max
 
     def get_result(self):
         try:
@@ -213,14 +213,14 @@ class AudioClassificationWorker(threading.Thread):
 
                 #print(f" Collected {len(self.audio_buffer)} samples in buffer...")
 
-                # check if we have enough data (≥ 20 s)
+                # check if we have enough data (≥ CLASSIFICATION_DURATION)
                 if (
                     len(self.audio_buffer) >= SAMPLES_PER_CLASSIFICATION
                     and time.time() - self.last_pred_time > self.PRED_INTERVAL
                 ):
                     self.last_pred_time = time.time()
 
-                    # take the last 20 s segment
+                    # take the last CLASSIFICATION_DURATION segment
                     audio_window = self.audio_buffer[-SAMPLES_PER_CLASSIFICATION:]
                     pred_class, confidence = classify_audio(audio_window)
 
