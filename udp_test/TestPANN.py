@@ -50,7 +50,7 @@ try:
     pann_model = AudioTagging(device=device)
     print("✅ Audio classification models loaded successfully.")
 except Exception as e:
-    print(f"⚠️ Error loading models: {e}")
+    print(f"Error loading models: {e}")
     label_encoder = None
     audio_classifier_model = None
     pann_model = None
@@ -126,7 +126,7 @@ class ADCReceiver(threading.Thread):
             self.sock.settimeout(1)
             print(f"✅ ADC UDP socket bound to port {udp_port}")
         except Exception as e:
-            print(f"⚠️ ADC socket binding error: {e}")
+            print(f"ADC socket binding error: {e}")
 
     def get_voltage_data(self):
         data = []
@@ -242,7 +242,7 @@ class AudioClassificationWorker(threading.Thread):
                         except queue.Full:
                             pass
 
-                        print(f"🎧 Classified: {pred_class} (confidence: {confidence:.3f})")
+                        #print(f" Classified: {pred_class} (confidence: {confidence:.3f})")
 
                 #time.sleep(0.2)
 
